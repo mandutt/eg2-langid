@@ -4,14 +4,14 @@
 
 EmbeddingGemma 2 오디오 임베딩 위에 얹은 **경량 언어 식별(language identification)** 패키지입니다.
 
-768차원 오디오 임베딩 공간 위의 **187KB 선형 분류기** 하나로 **29개 언어**를 판정합니다.
+768차원 오디오 임베딩 공간 위의 **175KB 선형 분류기** 하나로 **29개 언어**를 판정합니다.
 LLM 호출 없이 CPU만으로 동작합니다. 임베딩 모델은 **패키지에 포함되어 있지 않으며**, 이미 구동 중인
 EmbeddingGemma 2 ONNX 런타임에 붙어서 원본 오디오 또는 미리 계산된 벡터를 받아 동작합니다.
 
 ## 특징
 
 - **29개 언어** (정답 라벨로 검증된 22개 + VoxLingua107에서 편입한 7개)
-- **아티팩트 하나 187KB** — 필수 의존성은 `numpy` 뿐입니다
+- **분류기 하나 175KB** — 필수 의존성은 `numpy` 뿐입니다 (음악/효과음 판정용 MIT silero VAD 2.2MB 동봉)
 - **세 가지 통합 레벨**: 벡터 입력 · 오디오 + 임베더 콜백 · 선택적 모델 어댑터
 - **미지 언어 게이트** — 알려진 언어 어디에도 맞지 않는 오디오를 거부합니다
 - **라이브 데스크톱 위젯** — PC에서 재생 중인 소리의 언어를 5초 창으로 표시합니다
@@ -105,7 +105,8 @@ r.p_nonspeech   # 0~1
 
 파일 단위 교차검증 기준입니다 — 발화 129크롭(8개 언어 FLEURS), 기악 22곡, 보컬 20곡,
 Windows 효과음 70개. `vad`는 `eg2_langid.adapters.silero_vad.make_vad()`로 만듭니다
-(`onnxruntime` 필요, 모델이 없으면 numpy 경로로도 동작).
+(모델은 `eg2_langid/assets/silero_vad.onnx` 에 **동봉**되어 있습니다 — MIT © Silero Team.
+`onnxruntime` 이 필요하고, 없으면 numpy 경로로 동작하지만 검출률이 낮아집니다).
 
 **실측 한계**
 - 가창은 발화와 완전히 분리되지 않습니다 — 보컬 트랙의 75%만 음악으로 잡히고, 나머지는 언어로
@@ -176,7 +177,8 @@ CPU 사용률은 **0%** 입니다(실측). 재생 중에는 **약 1코어**를 �
 eg2_langid/          배포 패키지 (numpy만, 모델 가중치 미포함)
   detector.py        프로브 + 그룹 처리 + 쌍별 헤드 + 미지 언어 게이트
   adapters/gemma2.py 선택적 임베딩 어댑터 (onnxruntime / torch)
-  data/              model.npz (187KB) + labels.json
+  data/              model.npz (175KB) + labels.json
+  assets/            silero_vad.onnx (2.2MB, MIT) + 라이선스
 app/live_langid.py   라이브 데스크톱 위젯 (WASAPI 루프백)
 tools/               아티팩트 생성 + 참조 임베더
 tests/               패키지 자체 테스트 · 엔드투엔드 테스트
@@ -238,6 +240,9 @@ CPU에서는 **q8이 균형점**입니다. int8 가중치 + int8 연산(`accurac
 프로브 아티팩트는 두 공개 음성 데이터셋의 임베딩으로 학습했습니다. 두 데이터셋의 오디오는
 이 저장소에 재배포하지 않으며, 아래 표기는 각 라이센스 요구에 따른 것입니다.
 
+- **silero-vad** (Silero Team) — **MIT** — `eg2_langid/assets/silero_vad.onnx` 를 원본 그대로
+  재배포합니다(2.2MB). 라이선스 전문: `eg2_langid/assets/SILERO_VAD_LICENSE.txt`.
+  출처: <https://github.com/snakers4/silero-vad> (사본의 sha256은 `assets/README.md` 참고)
 - **FLEURS** (Google) — CC BY 4.0 — 학습·평가 데이터로 사용
 - **VoxLingua107** (TalTech) — CC BY 4.0 — 언어 커버리지 확장에 사용
 - **EmbeddingGemma 2** 모델 가중치는 이 저장소에 **포함되어 있지 않으며**, 별도 라이센스

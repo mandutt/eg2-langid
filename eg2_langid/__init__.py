@@ -13,4 +13,4 @@
 from .detector import LanguageIdentifier, Result
 
 __all__ = ['LanguageIdentifier', 'Result']
-__version__ = '1.4.0'
+__version__ = '1.5.0'

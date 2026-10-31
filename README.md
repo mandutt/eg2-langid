@@ -11,7 +11,7 @@ existing EmbeddingGemma 2 ONNX runtime and consumes either raw audio or precompu
 ## Features
 
 - **29 languages** (22 with held-out ground truth + 7 added from VoxLingua107)
-- **Single 187 KB artifact** — `numpy` is the only hard dependency
+- **Single 175 KB classifier** — `numpy` is the only hard dependency (a 2.2 MB MIT-licensed silero VAD ships alongside for music/sound-effect detection)
 - **Three integration levels**: vector-in · audio + embedder callback · optional model adapter
 - **Unknown-language gate** — rejects audio that matches no known language
 - **Live desktop widget** — shows the language of whatever is playing on the machine (5 s window)
@@ -107,7 +107,8 @@ r.p_nonspeech   # 0..1
 
 File-level cross-validation: 129 speech crops (8 languages, FLEURS), 22 instrumental and 20 vocal
 tracks, 70 Windows sound effects. `vad` comes from `eg2_langid.adapters.silero_vad.make_vad()`
-(needs `onnxruntime`; the model is optional — without it the numpy path still runs).
+(the model is **bundled** in `eg2_langid/assets/silero_vad.onnx`, MIT © Silero Team; needs
+`onnxruntime` — without it the numpy-only feature path still runs, at lower recall).
 
 **Limits, measured**
 - Singing is not reliably separated from speech — 75 % of vocal tracks are flagged, the rest show a
@@ -180,7 +181,8 @@ Two structural notes:
 eg2_langid/          distributable package (numpy only, no model weights)
   detector.py        probe + group + pairwise head + unknown gate
   adapters/gemma2.py optional embedding adapter (onnxruntime / torch)
-  data/              model.npz (187 KB) + labels.json
+  data/              model.npz (175 KB) + labels.json
+  assets/            silero_vad.onnx (2.2 MB, MIT) + its LICENSE
 app/live_langid.py   live desktop widget (WASAPI loopback)
 tools/               artifact export + reference embedder
 tests/               package self-test and end-to-end check
@@ -244,6 +246,9 @@ The probe artifact was trained on embeddings of two public speech datasets. Neit
 audio is redistributed in this repository; the attribution below is provided in accordance with
 their licenses.
 
+- **silero-vad** (Silero Team) — **MIT** — `eg2_langid/assets/silero_vad.onnx`, redistributed here
+  unchanged (2.2 MB). License text: `eg2_langid/assets/SILERO_VAD_LICENSE.txt`.
+  Source: <https://github.com/snakers4/silero-vad> (commit-pinned copy, sha256 in `assets/README.md`).
 - **FLEURS** (Google) — CC BY 4.0 — used for training and evaluation data.
 - **VoxLingua107** (TalTech) — CC BY 4.0 — used for additional language coverage.
 - **EmbeddingGemma 2** model weights are **not** included in this repository and are governed by

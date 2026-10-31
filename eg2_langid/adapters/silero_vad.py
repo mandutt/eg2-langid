@@ -1,8 +1,11 @@
 """silero VAD 어댑터 (선택) — 음악/효과음 검출 정확도를 높인다.
 
-onnxruntime 이 필요하며, 모델 파일은 다음 순서로 찾습니다.
+모델은 패키지에 **포함**되어 있습니다(MIT, Silero Team): eg2_langid/assets/silero_vad.onnx
+탐색 순서
   1) EG2_VAD_MODEL 환경변수
-  2) faster-whisper 패키지의 assets/silero_vad_v6.onnx (설치돼 있으면)
+  2) 패키지 내장 모델 (기본)
+  3) faster-whisper 패키지의 assets/silero_vad*.onnx (설치돼 있으면)
+onnxruntime 이 없으면 None 을 반환하며, 호출측은 numpy 특징 경로로 자동 폴백합니다.
 
 사용:
     from eg2_langid.adapters.silero_vad import make_vad
@@ -24,20 +27,19 @@ def find_model() -> str | None:
     p = os.environ.get('EG2_VAD_MODEL')
     if p and os.path.exists(p):
         return p
-    pats = [
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.dirname(__file__)))), '**', 'silero_vad*.onnx'),
-    ]
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for name in ('silero_vad.onnx', 'silero_vad_v6.onnx'):
+        cand = os.path.join(here, 'assets', name)
+        if os.path.exists(cand):
+            return cand
     try:
         import faster_whisper  # noqa: F401
-        base = os.path.dirname(faster_whisper.__file__)
-        pats.insert(0, os.path.join(base, 'assets', 'silero_vad*.onnx'))
+        hits = glob.glob(os.path.join(os.path.dirname(faster_whisper.__file__),
+                                      'assets', 'silero_vad*.onnx'))
+        if hits:
+            return sorted(hits)[0]
     except Exception:
         pass
-    for pat in pats:
-        hits = glob.glob(pat, recursive=True)
-        if hits:
-            return hits[0]
     return None
 
 
@@ -52,22 +54,32 @@ def make_vad(model_path: str | None = None, threshold: float = 0.5):
         return None
     sess = ort.InferenceSession(path, providers=['CPUExecutionProvider'])
     names = {i.name for i in sess.get_inputs()}
-    if names != {'input', 'h', 'c'}:
+    if {'input', 'state', 'sr'} <= names:      # 저장소 내장 모델(state 결합형)
+        layout = 'state'
+    elif {'input', 'h', 'c'} <= names:         # v6 (h/c 분리형)
+        layout = 'hc'
+    else:
         return None
 
     def vad(pcm) -> float:
         a = np.asarray(pcm, dtype=np.float32).ravel()
         if len(a) < WIN:
             return 0.0
+        state = np.zeros((2, 1, 128), np.float32)
         h = np.zeros((1, 1, 128), np.float32)
         c = np.zeros((1, 1, 128), np.float32)
         ctx = np.zeros(CTX, np.float32)
         hits = []
         for st in range(0, len(a) - WIN + 1, WIN):
             x = np.concatenate([ctx, a[st:st + WIN]])[None, :]
-            out = sess.run(None, {'input': x, 'h': h, 'c': c})
-            hits.append(float(out[0].ravel()[0]) > threshold)
-            h, c = out[1], out[2]
+            if layout == 'state':
+                out = sess.run(None, {'input': x, 'state': state,
+                                      'sr': np.array(SR, np.int64)})
+                state = out[1]
+            else:
+                out = sess.run(None, {'input': x, 'h': h, 'c': c})
+                h, c = out[1], out[2]
+            hits.append(float(np.ravel(out[0])[0]) > threshold)
             ctx = x[0, -CTX:]
         return float(np.mean(hits)) if hits else 0.0
 
