@@ -82,7 +82,7 @@ r = li.detect_audio(pcm_float32_16k, embed_fn=embed, window_sec=5.0)
 python app/live_langid.py
 ```
 
-창을 드래그해 이동하고, 우클릭으로 일시정지하거나 종료할 수 있습니다.
+창을 아무 곳이나 드래그해 이동하고, 우측 상단 **×** 를 누르면 종료됩니다. 우클릭 메뉴에서 일시정지/종료도 가능합니다.
 
 ## 지원 언어 (29개)
 

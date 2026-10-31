@@ -83,7 +83,7 @@ Captures system audio (WASAPI loopback), keeps a 5-second ring buffer and update
 python app/live_langid.py
 ```
 
-Drag to move · right-click to pause or quit.
+Drag anywhere to move · click **×** to close · right-click for pause / quit.
 
 ## Supported languages (29)
 

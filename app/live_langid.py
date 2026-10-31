@@ -134,6 +134,12 @@ class App:
         self.name.pack(side='left', padx=8)
         self.conf = tk.Label(top, text='', font=('Consolas', 10), fg=self.DIM, bg=self.BG)
         self.conf.pack(side='right')
+        self.close_btn = tk.Label(top, text='\u2715', font=('Segoe UI', 10), fg='#5b6270',
+                                  bg=self.BG, cursor='hand2', padx=4)
+        self.close_btn.pack(side='right', padx=(6, 0), before=self.conf)   # 최우측에 배치
+        self.close_btn.bind('<Button-1>', lambda e: (self.quit(), 'break')[1])
+        self.close_btn.bind('<Enter>', lambda e: self.close_btn.config(fg='#ef4444'))
+        self.close_btn.bind('<Leave>', lambda e: self.close_btn.config(fg='#5b6270'))
 
         self.bar = tk.Canvas(w, height=6, bg='#22262d', highlightthickness=0, width=248)
         self.bar.pack(fill='x', pady=(8, 4))
