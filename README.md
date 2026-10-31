@@ -137,6 +137,20 @@ everything else* — a domain shortcut, not "speech vs music". On real YouTube a
 reverb, background music) it misfires on more than half the speech. The signal features measure the
 thing itself — VAD speech presence and 2–8 Hz syllabic modulation — and hold up.
 
+**Hybrid (signal + probe reaction) — measured, not shipped.** Concatenating the 11 signal features
+with the 6 probe-response features (top score, margin, entropy, centroid/cosine gaps) into one
+17-feature logistic does improve things, but only marginally:
+
+| 5-fold out-of-fold · threshold at 0.5 % speech FP | AUC | instrumental | vocal | SFX | YouTube FP |
+|---|---|---|---|---|---|
+| signal only (11, with VAD) | 0.9851 | 97.5 % | 80.0 % | 95.7 % | 4.3 % |
+| probe reaction only (6) | 0.9767 | 67.9 % | 18.3 % | 72.3 % | 5.0 % |
+| **hybrid (17, C=1)** | **0.9918** | **100 %** | 80.0 % | 97.9 % | **3.6 %** |
+
+It is not used because the probe reaction requires the **embedding**, so every music window would pay
+the ~0.4 s embedding cost that the current detector avoids by deciding on the waveform alone. A 0.7 pt
+AUC gain does not buy that back on a widget that idles at 0 % CPU.
+
 Reproduce: `data/raw/speech_music/compare_embed_signal.json`, and a 699-second YouTube track gives
 3.8 % false positives with median VAD ratio 0.93.
 
