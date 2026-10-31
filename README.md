@@ -121,6 +121,24 @@ tracks, 70 Windows sound effects. `vad` comes from `eg2_langid.adapters.silero_v
 envelope modulation, spectral centroid/flatness/flux, RMS dynamics) with a 11-number logistic
 regression, so it cannot degrade the 29-language accuracy (gold stays 0.9868).
 
+#### Why the detector uses signal features, not the embedding
+
+It is tempting to reuse the 768-d embedding — it is already computed, so a music head would be free.
+Measured, that choice is dangerous:
+
+| Detector trained on gold speech + 112 music/SFX files | Gold holdout | **Real YouTube speech (80 windows)** |
+|---|---|---|
+| EG2 embedding, 768-d logistic | AUC **1.000**, detects 100 % | **56.6 % wrongly called music** |
+| Signal features + VAD (shipped) | AUC 0.984, detects 98.8 % | **3.8 % wrongly called music** |
+
+The embedding head scores perfectly in-distribution because what it learns is *studio recording vs
+everything else* — a domain shortcut, not "speech vs music". On real YouTube audio (compression,
+reverb, background music) it misfires on more than half the speech. The signal features measure the
+thing itself — VAD speech presence and 2–8 Hz syllabic modulation — and hold up.
+
+Reproduce: `data/raw/speech_music/compare_embed_signal.json`, and a 699-second YouTube track gives
+3.8 % false positives with median VAD ratio 0.93.
+
 ### Live desktop widget
 
 Captures system audio (WASAPI loopback), keeps a 5-second ring buffer and re-judges every 2 s.
