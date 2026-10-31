@@ -98,7 +98,16 @@ instead of a (wrong) language.
 r = li.detect_audio(pcm, embed_fn=embed, vad_fn=vad)   # vad is optional
 r.kind          # 'speech' | 'music' | 'sfx'
 r.p_nonspeech   # 0..1
+
+# opt-in: also use the language probe's reaction (17 features instead of 11)
+r = li.detect_audio(pcm, embed_fn=embed, vad_fn=vad, use_hybrid=True)
 ```
+
+`use_hybrid=False` (default) judges music from the **waveform alone** — a music window never pays the
+~0.4 s embedding. `use_hybrid=True` adds the probe reaction (top score, margin, entropy, centroid
+gap), which measures slightly better out-of-fold (AUC 0.9851 → 0.9918, instrumental 97.5 → 100 %,
+YouTube false positives 4.3 → 3.6 %) but requires the embedding on every window. The desktop widget
+enables it with `EG2_HYBRID=1`.
 
 | Setting | Speech false-positives | Instrumental | Vocal music | Sound effects |
 |---|---|---|---|---|

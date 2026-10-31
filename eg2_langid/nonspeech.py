@@ -63,8 +63,13 @@ class NonSpeechDetector:
         self.ok = 'ns_novad_w' in art
         if not self.ok:
             return
+        # 프로브 반응 특징(하이브리드용)에 필요한 가중치
+        self.W = art['W'].astype(np.float32) if 'W' in art else None
+        self.centroids = art['centroids'].astype(np.float32) if 'centroids' in art else None
+        self.cls_mu = art['cls_mu'].astype(np.float32) if 'cls_mu' in art else None
+        self.cls_sd = art['cls_sd'].astype(np.float32) if 'cls_sd' in art else None
         self.sets = {}
-        for name in ('vad', 'novad'):
+        for name in ('vad', 'novad', 'hybrid'):
             if f'ns_{name}_w' not in art:
                 continue
             self.sets[name] = dict(
@@ -79,13 +84,47 @@ class NonSpeechDetector:
         self.classes3 = [str(c) for c in art['ns_classes3']] if 'ns_classes3' in art else \
             ['speech', 'music', 'sfx']
 
-    def score(self, pcm: np.ndarray, vad_fn=None) -> tuple[float, str, float]:
-        """→ (비발화 확률, 종류('speech'|'music'|'sfx'), 그 종류의 확률)"""
+    def probe_features(self, vec) -> np.ndarray | None:
+        """768d 임베딩 → 프로브 반응 6특징 (최고점수·margin·엔트로피·코사인 최대/간격/z)."""
+        if self.W is None or self.centroids is None or vec is None:
+            return None
+        x = np.asarray(vec, np.float32).ravel()
+        x = x / (np.linalg.norm(x) + 1e-12)
+        P = x @ self.W
+        srt = np.sort(P)
+        Z = P / 0.1
+        Z = Z - Z.max()
+        e = np.exp(Z)
+        ent = float(-(e / e.sum() * np.log(e / e.sum() + 1e-12)).sum())
+        cos = self.centroids @ x
+        cs = np.sort(cos)
+        topc = int(cos.argmax())
+        cz = (float(cs[-1]) - float(self.cls_mu[topc])) / float(self.cls_sd[topc])
+        return np.array([srt[-1], srt[-1] - srt[-2], ent, cs[-1], cs[-1] - cs[-2], cz], np.float32)
+
+    def score(self, pcm: np.ndarray, vad_fn=None, vec=None, hybrid: bool = False
+              ) -> tuple[float, str, float]:
+        """→ (비발화 확률, 종류('speech'|'music'|'sfx'), 그 종류의 확률)
+
+        hybrid=True 이고 vec(임베딩)이 주어지면 신호 특징 + 프로브 반응 17특징을 사용한다.
+        """
         if not self.ok:
             return 0.0, 'speech', 1.0
-        key = 'vad' if (vad_fn is not None and 'vad' in self.sets) else 'novad'
+        if hybrid and vec is not None and 'hybrid' in self.sets:
+            pf = self.probe_features(vec)
+            if pf is not None:
+                key = 'hybrid'
+            else:
+                hybrid = False
+        if not (hybrid and 'hybrid' in self.sets):
+            key = 'vad' if (vad_fn is not None and 'vad' in self.sets) else 'novad'
         p = self.sets[key]
         x = features(pcm, vad_fn)
+        if key == 'hybrid':
+            pf = self.probe_features(vec)
+            if pf is None:
+                return 0.0, 'speech', 1.0
+            x = np.concatenate([x, pf])
         if len(x) != len(p['mu']):          # 특징 수 불일치 방어
             return 0.0, 'speech', 1.0
         z = (x - p['mu']) / p['sd']

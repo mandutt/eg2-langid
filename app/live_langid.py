@@ -29,6 +29,7 @@ WINDOW_SEC = 5.0
 HOP_SEC = float(os.environ.get('EG2_HOP', '2.0'))        # 판정 주기(초) — CPU와 직결
 IDLE_HOP_SEC = float(os.environ.get('EG2_IDLE_HOP', '4.0'))
 SILENCE_RMS = 5e-4      # 이보다 조용하면 임베딩 생략 (디지털 무음은 0)
+HYBRID = os.environ.get('EG2_HYBRID', '0') == '1'   # 신호+프로브 반응(느림, 기본 꺼짐)
 
 DISPLAY = {                      # 한국어 표기 (OS가 한국어일 때)
     'ko_kr': '한국어', 'en_us': '영어', 'ja_jp': '일본어', 'cmn_hans_cn': '중국어(간체)',
@@ -320,7 +321,7 @@ class App:
         self.silent_run = 0
         try:
             r = self.li.detect_audio(a, embed_fn=self.embed, window_sec=WINDOW_SEC,
-                                     vad_fn=self.vad)
+                                     vad_fn=self.vad, use_hybrid=HYBRID)
         except Exception as e:
             self.q.put(('error', self.T['detect_fail'].format(e=e)))
             return

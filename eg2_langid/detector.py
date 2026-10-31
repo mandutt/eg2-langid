@@ -73,7 +73,8 @@ class LanguageIdentifier:
         self.cal_p = art['cal_p'].astype(np.float32) if 'cal_p' in art else None
         self.ns = NonSpeechDetector(art)
         self._ns_thr = {'ns_vad_thr': float(art['ns_vad_thr']) if 'ns_vad_thr' in art else 0.7,
-                        'ns_novad_thr': float(art['ns_novad_thr']) if 'ns_novad_thr' in art else 0.85}
+                        'ns_novad_thr': float(art['ns_novad_thr']) if 'ns_novad_thr' in art else 0.85,
+                        'ns_hybrid_thr': float(art['ns_hybrid_thr']) if 'ns_hybrid_thr' in art else 0.838}
         self.labels: list[str] = meta['labels']
         self.meta = meta.get('meta', {})
         self.groups: dict[str, str] = meta.get('groups', {})
@@ -137,16 +138,24 @@ class LanguageIdentifier:
                       scores=scores, audio_sec=round(audio_sec, 2),
                       p_correct=None if p_correct is None else round(p_correct, 3))
 
-    def _nonspeech(self, seg: np.ndarray, vad_fn) -> Result | None:
+    @property
+    def hybrid_available(self) -> bool:
+        return bool(getattr(self.ns, 'ok', False) and 'hybrid' in getattr(self.ns, 'sets', {}))
+
+    def _nonspeech(self, seg: np.ndarray, vad_fn, vec=None, hybrid: bool = False) -> Result | None:
         """한 창이 음악/효과음이면 언어 판정 대신 그 결과를 돌려준다."""
         if not self.ns.ok:
             return None
-        p_ns, kind, p_kind = self.ns.score(seg, vad_fn)
-        thr = self._ns_thr['ns_vad_thr' if vad_fn is not None else 'ns_novad_thr']
+        use_hybrid = bool(hybrid and vec is not None and self.hybrid_available)
+        p_ns, kind, p_kind = self.ns.score(seg, vad_fn, vec=vec, hybrid=use_hybrid)
+        if use_hybrid:
+            thr = self._ns_thr.get('ns_hybrid_thr', 0.838)
+        else:
+            thr = self._ns_thr['ns_vad_thr' if vad_fn is not None else 'ns_novad_thr']
         if p_ns < thr:
             return None
         return Result(lang=None, label=kind, confidence=0.0, unknown=True, margin=0.0,
-                      scores={kind: round(p_kind, 4)}, distribution={},
+                      scores={kind: round(p_kind, 4)}, distribution={kind: 1.0},
                       audio_sec=round(len(seg) / SR, 2), p_correct=None,
                       kind=kind, p_nonspeech=round(p_ns, 3))
 
@@ -155,10 +164,13 @@ class LanguageIdentifier:
                      embed_fn: Callable[[np.ndarray], np.ndarray],
                      window_sec: float = 5.0, hop_sec: float | None = None,
                      sample_rate: int = SR,
-                     vad_fn: Callable[[np.ndarray], float] | None = None) -> Result:
+                     vad_fn: Callable[[np.ndarray], float] | None = None,
+                     use_hybrid: bool = False) -> Result:
         """pcm(float32, mono)에서 최근 window_sec 구간을 임베딩해 판정.
         hop_sec을 주면 여러 창을 판정해 다수결 + 비중을 함께 반환.
-        vad_fn을 주면 음악/효과음 검출 정확도가 올라갑니다(선택)."""
+        vad_fn을 주면 음악/효과음 검출 정확도가 올라갑니다(선택).
+        use_hybrid=True → 신호 특징 + 프로브 반응(17특징)으로 비발화를 판정합니다. 다만 매 창마다
+        임베딩이 필요해 느립니다(기본값 False — 파형만으로 판정)."""
         a = np.asarray(pcm, dtype=np.float32).ravel()
         sec = len(a) / sample_rate
         if sec < MIN_SEC:
@@ -167,6 +179,12 @@ class LanguageIdentifier:
         win = int(window_sec * sample_rate)
         if hop_sec is None or sec <= window_sec:
             seg = a[-win:] if len(a) > win else a
+            if use_hybrid and self.hybrid_available:
+                vec = embed_fn(np.ascontiguousarray(seg))
+                ns = self._nonspeech(seg, vad_fn, vec=vec, hybrid=True)
+                if ns is not None:
+                    return ns
+                return self.detect(vec, audio_sec=len(seg) / sample_rate)
             ns = self._nonspeech(seg, vad_fn)
             if ns is not None:
                 return ns
@@ -177,23 +195,30 @@ class LanguageIdentifier:
         segs = [a[s:s + win] for s in starts if s + win <= len(a)]
 
         # ① 비발화 판정 (여러 창 평균)
+        vecs = [None] * len(segs)
         if segs and self.ns.ok:
+            vecs = ([embed_fn(np.ascontiguousarray(sg)) for sg in segs]
+                    if (use_hybrid and self.hybrid_available) else [None] * len(segs))
             probs, kinds = [], []
-            for sg in segs:
-                p_ns, kind, _ = self.ns.score(sg, vad_fn)
+            for sg, vv in zip(segs, vecs):
+                p_ns, kind, _ = self.ns.score(sg, vad_fn, vec=vv, hybrid=bool(vv is not None))
                 probs.append(p_ns); kinds.append(kind)
             mean_p = float(np.mean(probs))
-            key = 'ns_novad_thr' if vad_fn is None else 'ns_vad_thr'
+            if vecs[0] is not None:
+                key = 'ns_hybrid_thr'
+            else:
+                key = 'ns_novad_thr' if vad_fn is None else 'ns_vad_thr'
             if mean_p >= getattr(self, '_ns_thr', {}).get(key, 0.7):
                 from collections import Counter
                 kind = Counter(kinds).most_common(1)[0][0]
                 return Result(None, kind, 0.0, True, 0.0,
-                              {kind: round(mean_p, 4)}, {}, round(len(a) / sample_rate, 2),
-                              None, kind, round(mean_p, 3))
+                              {kind: round(mean_p, 4)}, {kind: 1.0},
+                              round(len(a) / sample_rate, 2), None, kind, round(mean_p, 3))
 
         results = []
-        for sg in segs:
-            results.append(self.detect(embed_fn(np.ascontiguousarray(sg)), audio_sec=window_sec))
+        for sg, vv in zip(segs, vecs):
+            vec = vv if vv is not None else embed_fn(np.ascontiguousarray(sg))
+            results.append(self.detect(vec, audio_sec=window_sec))
         if not results:
             return self.detect(embed_fn(np.ascontiguousarray(a[-win:])), audio_sec=window_sec)
         counts: dict[str, float] = {}

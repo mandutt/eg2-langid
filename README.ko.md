@@ -96,7 +96,15 @@ r = li.detect_audio(pcm_float32_16k, embed_fn=embed, window_sec=5.0)
 r = li.detect_audio(pcm, embed_fn=embed, vad_fn=vad)   # vad는 선택
 r.kind          # 'speech' | 'music' | 'sfx'
 r.p_nonspeech   # 0~1
+
+# 선택: 언어 프로브 반응까지 사용 (11특징 → 17특징)
+r = li.detect_audio(pcm, embed_fn=embed, vad_fn=vad, use_hybrid=True)
 ```
+
+`use_hybrid=False`(기본)는 **파형만으로** 음악을 판정하므로 음악 창에서 ~0.4초 임베딩을 치르지
+않습니다. `use_hybrid=True`는 프로브 반응(최고점수·margin·엔트로피·센트로이드 간격)을 더해
+out-of-fold 기준 조금 더 좋지만(AUC 0.9851 → 0.9918, 기악 97.5 → 100%, 유튜브 오탐 4.3 → 3.6%),
+모든 창에서 임베딩이 필요합니다. 데스크톱 위젯은 `EG2_HYBRID=1` 로 켭니다.
 
 | 설정 | 발화 오탐 | 기악 | 보컬 음악 | 효과음 |
 |---|---|---|---|---|
