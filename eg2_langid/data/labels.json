@@ -1,0 +1,76 @@
+{
+ "labels": [
+  "ar_eg",
+  "cmn_hans_cn",
+  "de_de",
+  "en_us",
+  "es_419",
+  "fil_ph",
+  "fr_fr",
+  "hi_in",
+  "id_id",
+  "it_it",
+  "ja_jp",
+  "ko_kr",
+  "ms_my",
+  "nl_nl",
+  "pl_pl",
+  "pt_br",
+  "ru_ru",
+  "sv_se",
+  "th_th",
+  "tr_tr",
+  "uk_ua",
+  "vi_vn",
+  "cs_cz",
+  "da_dk",
+  "fa_ir",
+  "hr_hr",
+  "hy_am",
+  "sw_ke",
+  "ur_pk"
+ ],
+ "groups": {
+  "ur_pk": "hi_in"
+ },
+ "pairwise": {
+  "classes": [
+   "id_id",
+   "ms_my"
+  ]
+ },
+ "gate": {
+  "fr": 0.05,
+  "features": [
+   "margin",
+   "cos_gap",
+   "cos_z"
+  ]
+ },
+ "meta": {
+  "version": "1.0.0",
+  "created": "2026-10-31T20:15:40",
+  "gold_acc": 0.9868,
+  "temperature": 0.05,
+  "ece": 0.0088,
+  "n_classes": 29,
+  "alloc": {
+   "en": 400,
+   "sv": 200,
+   "id": 400,
+   "ms": 400,
+   "ur": 400,
+   "da": 400,
+   "fa": 400,
+   "cs": 400,
+   "hr": 400,
+   "hy": 400,
+   "sw": 400,
+   "uk": 800,
+   "ru": 0,
+   "hi": 0
+  },
+  "head_n": 2000,
+  "seed": 7
+ }
+}

@@ -1,0 +1,9 @@
+# core
+numpy>=1.24
+
+# live desktop widget (WASAPI loopback capture)
+pyaudiowpatch>=0.2.12
+
+# optional: to embed audio directly with the adapter
+# onnxruntime>=1.16
+# torch>=2.0
