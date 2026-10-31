@@ -74,6 +74,19 @@ embed = make_embedder()                                   # EG2_MMAL4_DIR 를 �
 r = li.detect_audio(pcm_float32_16k, embed_fn=embed, window_sec=5.0)
 ```
 
+### Result 필드
+
+| 필드 | 의미 |
+|---|---|
+| `lang` / `label` | 승자 클래스(라벨은 {hi, ur} 그룹 표기 적용). 거부되면 `None` |
+| `confidence` | **미지언어 게이트 임계 대비 여유** — `0`이면 간신히 통과, `1`이면 여유로움. 정확도 수치가 아닙니다 |
+| `p_correct` | **이 판정이 맞을 확률**(gold margin 캘리브레이션). 위젯이 표시하는 값 |
+| `margin` | 1위 점수 − 2위 점수 |
+| `unknown` | 29개 언어 밖으로 판정되어 게이트가 거부 |
+| `distribution` | 오디오가 한 창보다 길 때 창별 투표 비중 |
+
+짧은 클립은 `confidence`가 0.02여도 정답일 수 있으므로, 화면에는 `p_correct`를 쓰세요.
+
 ### 라이브 데스크톱 위젯
 
 시스템 출력음을 WASAPI 루프백으로 캡처해 5초 링버퍼를 유지하고, 2초마다 다시 판정합니다.

@@ -75,6 +75,19 @@ embed = make_embedder()                                   # reads EG2_MMAL4_DIR
 r = li.detect_audio(pcm_float32_16k, embed_fn=embed, window_sec=5.0)
 ```
 
+### Result fields
+
+| Field | Meaning |
+|---|---|
+| `lang` / `label` | winning class; `label` has the {hi, ur} group mapping applied. `None` when rejected |
+| `confidence` | **headroom above the unknown-gate threshold** — `0` means barely accepted, `1` means far inside. Not an accuracy figure |
+| `p_correct` | **calibrated probability that the verdict is right** (from gold margins) — this is what the widget shows |
+| `margin` | top-1 minus top-2 probe score |
+| `unknown` | the gate rejected the clip as outside the 29 languages |
+| `distribution` | per-window vote share, when the audio is longer than one window |
+
+A short clip can score `confidence = 0.02` and still be correct, so display `p_correct`.
+
 ### Live desktop widget
 
 Captures system audio (WASAPI loopback), keeps a 5-second ring buffer and re-judges every 2 s.
