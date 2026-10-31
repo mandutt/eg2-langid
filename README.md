@@ -129,6 +129,7 @@ Measured, that choice is dangerous:
 | Detector trained on gold speech + 112 music/SFX files | Gold holdout | **Real YouTube speech (80 windows)** |
 |---|---|---|
 | EG2 embedding, 768-d logistic | AUC **1.000**, detects 100 % | **56.6 % wrongly called music** |
+| Language-probe response (margin, entropy, centroid gap) | AUC 0.983, detects 97.7 % | 9.4 % wrongly called music |
 | Signal features + VAD (shipped) | AUC 0.984, detects 98.8 % | **3.8 % wrongly called music** |
 
 The embedding head scores perfectly in-distribution because what it learns is *studio recording vs
