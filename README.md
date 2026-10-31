@@ -128,6 +128,42 @@ examples/            quickstart
 `tools/export_artifact.py` regenerates `model.npz` from a local dataset directory and reproduces
 the reported gold accuracy.
 
+## Model & quantization
+
+The probe consumes 768-dim L2-normalized audio embeddings. The embedding model is not bundled —
+any EmbeddingGemma 2 ONNX build that exposes the sentence-embedding output works.
+
+**What the numbers in this README were measured with**
+
+| Item | Value |
+|---|---|
+| Weight format | **int4 block quantization (`MatMulNBits`), `accuracy_level=4`** — "q4-al4" |
+| Files | audio encoder 340 MB + backbone 314 MB (**654 MB**) |
+| Resident memory | ≈ 0.6 GB |
+| Latency | 0.4–1.2 s per 27 s chunk (CPU, 4 threads) |
+
+Node-level check of the shipped build: 123 `MatMulNBits` in the audio encoder and 146 in the
+backbone — i.e. **int4 weights, not int8**.
+
+**Choosing a CPU quantization**
+
+| Variant | Disk | RAM on CPU | Notes |
+|---|---|---|---|
+| **q8** (dynamic int8) | ~2× q4 | **lowest of the three** | int8 weights + fp32 activations; on this model family we measured ≈466 MB commit vs ≈559 MB for q4f16 |
+| **q4-al4** | **smallest on disk** | ≈0.6 GB | int4 weights, int8 compute; the build behind every figure here |
+| q4f16 | small | **highest** | keeps fp16 activations alive — the worst choice when RAM is tight |
+
+Rule of thumb: **q8 if memory is the constraint, q4-al4 if disk size is the constraint.**
+q4f16 buys neither on CPU.
+
+**Do not run quantized weights on a GPU execution provider.** `MatMulNBits` / `MatMulInteger`
+have no DirectML or CUDA kernels — those nodes silently fall back to CPU, so you reserve GPU
+memory without getting GPU speed.
+
+> Honest note: q4-al4 and q8 were not compared head-to-head on the *audio encoder* here.
+> The adapter is quantization-agnostic, so either build runs, but the reported accuracy
+> corresponds to q4-al4.
+
 ## Limitations
 
 - Windows is the only platform tested for the live widget (WASAPI loopback); the package itself is portable.
