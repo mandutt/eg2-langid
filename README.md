@@ -119,6 +119,25 @@ tracks, 70 Windows sound effects. `vad` comes from `eg2_langid.adapters.silero_v
 (the model is **bundled** in `eg2_langid/assets/silero_vad.onnx`, MIT © Silero Team; needs
 `onnxruntime` — without it the numpy-only feature path still runs, at lower recall).
 
+**Noisy-speech bias — fixed after a field report.** In a loud club interview or an FPS stream the
+first version called too much of it music. Reproduced by mixing speech with music/effects at negative
+SNR (music louder than the voice):
+
+| speech mixed with | old model | current model |
+|---|---|---|
+| music, 0 dB | 6.2 % called music | **0.0 %** |
+| music, −5 dB | 18.8 % | **0.0 %** |
+| music, −10 dB | **37.5 %** | **0.0 %** |
+| game effects, −10 dB | 0.0 % | 0.0 % |
+| real YouTube track (80 windows) | 3.8 % | **2.5 %** |
+| music/SFX still detected | 95.0 % | 81.7 % |
+
+Two changes produced this: the speech class was retrained with 240 mixed samples (speech + music and
+speech + effects at 0 and −5 dB, song/file separated from the test set), and a **VAD guardrail** was
+added — if at least 20 % of the window is detected as speech, the music verdict is cancelled. The
+guardrail is the bigger lever; the price is that less music is flagged (95 % → 82 %) and vocal tracks
+may now show their lyrics' language instead of *Music*.
+
 **Limits, measured**
 - Singing is not reliably separated from speech — 75 % of vocal tracks are flagged, the rest show a
   language (which is arguably correct: the lyrics *are* that language).

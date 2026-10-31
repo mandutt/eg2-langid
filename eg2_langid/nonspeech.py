@@ -83,6 +83,8 @@ class NonSpeechDetector:
             )
         self.classes3 = [str(c) for c in art['ns_classes3']] if 'ns_classes3' in art else \
             ['speech', 'music', 'sfx']
+        # 가드레일: 창의 이 비율 이상이 발화로 잡히면 음악 판정 금지 (시끄러운 인터뷰·게임 방송 대응)
+        self.guard = float(art['ns_guard']) if 'ns_guard' in art else 0.20
 
     def probe_features(self, vec) -> np.ndarray | None:
         """768d 임베딩 → 프로브 반응 6특징 (최고점수·margin·엔트로피·코사인 최대/간격/z)."""
@@ -110,6 +112,16 @@ class NonSpeechDetector:
         """
         if not self.ok:
             return 0.0, 'speech', 1.0
+        # ① 가드레일 — 발화가 충분히 잡히면 음악/효과음 판정을 취소한다
+        v = None
+        if vad_fn is not None:
+            try:
+                v = float(vad_fn(pcm))
+            except Exception:
+                v = None
+        if v is not None and v >= self.guard:
+            return 0.0, 'speech', 1.0
+        vf = (lambda _z: v) if v is not None else None
         if hybrid and vec is not None and 'hybrid' in self.sets:
             pf = self.probe_features(vec)
             if pf is not None:
@@ -119,7 +131,7 @@ class NonSpeechDetector:
         if not (hybrid and 'hybrid' in self.sets):
             key = 'vad' if (vad_fn is not None and 'vad' in self.sets) else 'novad'
         p = self.sets[key]
-        x = features(pcm, vad_fn)
+        x = features(pcm, vf)
         if key == 'hybrid':
             pf = self.probe_features(vec)
             if pf is None:
