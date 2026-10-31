@@ -8,6 +8,8 @@ from typing import Callable, Sequence
 
 import numpy as np
 
+from .nonspeech import NonSpeechDetector
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _DATA = os.path.join(_HERE, 'data')
 
@@ -27,11 +29,15 @@ class Result:
     distribution: dict[str, float] = field(default_factory=dict)
     audio_sec: float = 0.0
     p_correct: float | None = None    # gold 캘리브레이션상 정답 확률
+    kind: str = 'speech'              # 'speech' | 'music' | 'sfx'
+    p_nonspeech: float | None = None  # 비발화(음악/효과음) 확률
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     def __str__(self) -> str:
+        if self.kind != 'speech':
+            return f'{self.kind} ({(self.p_nonspeech or 0) * 100:.0f}%)'
         if self.unknown:
             return f'unknown (margin {self.margin:.3f})'
         return f'{self.label} ({self.confidence * 100:.0f}%)'
@@ -65,6 +71,9 @@ class LanguageIdentifier:
         self.gate_q95_global = float(art['gate_q95_global']) if 'gate_q95_global' in art else None
         self.cal_m = art['cal_m'].astype(np.float32) if 'cal_m' in art else None
         self.cal_p = art['cal_p'].astype(np.float32) if 'cal_p' in art else None
+        self.ns = NonSpeechDetector(art)
+        self._ns_thr = {'ns_vad_thr': float(art['ns_vad_thr']) if 'ns_vad_thr' in art else 0.7,
+                        'ns_novad_thr': float(art['ns_novad_thr']) if 'ns_novad_thr' in art else 0.85}
         self.labels: list[str] = meta['labels']
         self.meta = meta.get('meta', {})
         self.groups: dict[str, str] = meta.get('groups', {})
@@ -128,13 +137,28 @@ class LanguageIdentifier:
                       scores=scores, audio_sec=round(audio_sec, 2),
                       p_correct=None if p_correct is None else round(p_correct, 3))
 
+    def _nonspeech(self, seg: np.ndarray, vad_fn) -> Result | None:
+        """한 창이 음악/효과음이면 언어 판정 대신 그 결과를 돌려준다."""
+        if not self.ns.ok:
+            return None
+        p_ns, kind, p_kind = self.ns.score(seg, vad_fn)
+        thr = self._ns_thr['ns_vad_thr' if vad_fn is not None else 'ns_novad_thr']
+        if p_ns < thr:
+            return None
+        return Result(lang=None, label=kind, confidence=0.0, unknown=True, margin=0.0,
+                      scores={kind: round(p_kind, 4)}, distribution={},
+                      audio_sec=round(len(seg) / SR, 2), p_correct=None,
+                      kind=kind, p_nonspeech=round(p_ns, 3))
+
     # ── 오디오 → 결과 (임베딩은 주입)
     def detect_audio(self, pcm: Sequence[float] | np.ndarray,
                      embed_fn: Callable[[np.ndarray], np.ndarray],
                      window_sec: float = 5.0, hop_sec: float | None = None,
-                     sample_rate: int = SR) -> Result:
+                     sample_rate: int = SR,
+                     vad_fn: Callable[[np.ndarray], float] | None = None) -> Result:
         """pcm(float32, mono)에서 최근 window_sec 구간을 임베딩해 판정.
-        hop_sec을 주면 여러 창을 판정해 다수결 + 비중을 함께 반환."""
+        hop_sec을 주면 여러 창을 판정해 다수결 + 비중을 함께 반환.
+        vad_fn을 주면 음악/효과음 검출 정확도가 올라갑니다(선택)."""
         a = np.asarray(pcm, dtype=np.float32).ravel()
         sec = len(a) / sample_rate
         if sec < MIN_SEC:
@@ -143,16 +167,33 @@ class LanguageIdentifier:
         win = int(window_sec * sample_rate)
         if hop_sec is None or sec <= window_sec:
             seg = a[-win:] if len(a) > win else a
+            ns = self._nonspeech(seg, vad_fn)
+            if ns is not None:
+                return ns
             return self.detect(embed_fn(np.ascontiguousarray(seg)), audio_sec=len(seg) / sample_rate)
 
         hop = int(hop_sec * sample_rate)
         starts = list(range(max(0, len(a) - win), -1, -hop))[::-1]
+        segs = [a[s:s + win] for s in starts if s + win <= len(a)]
+
+        # ① 비발화 판정 (여러 창 평균)
+        if segs and self.ns.ok:
+            probs, kinds = [], []
+            for sg in segs:
+                p_ns, kind, _ = self.ns.score(sg, vad_fn)
+                probs.append(p_ns); kinds.append(kind)
+            mean_p = float(np.mean(probs))
+            key = 'ns_novad_thr' if vad_fn is None else 'ns_vad_thr'
+            if mean_p >= getattr(self, '_ns_thr', {}).get(key, 0.7):
+                from collections import Counter
+                kind = Counter(kinds).most_common(1)[0][0]
+                return Result(None, kind, 0.0, True, 0.0,
+                              {kind: round(mean_p, 4)}, {}, round(len(a) / sample_rate, 2),
+                              None, kind, round(mean_p, 3))
+
         results = []
-        for s in starts:
-            seg = a[s:s + win]
-            if len(seg) < win:
-                continue
-            results.append(self.detect(embed_fn(np.ascontiguousarray(seg)), audio_sec=window_sec))
+        for sg in segs:
+            results.append(self.detect(embed_fn(np.ascontiguousarray(sg)), audio_sec=window_sec))
         if not results:
             return self.detect(embed_fn(np.ascontiguousarray(a[-win:])), audio_sec=window_sec)
         counts: dict[str, float] = {}

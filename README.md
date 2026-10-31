@@ -88,6 +88,38 @@ r = li.detect_audio(pcm_float32_16k, embed_fn=embed, window_sec=5.0)
 
 A short clip can score `confidence = 0.02` and still be correct, so display `p_correct`.
 
+### Music / sound-effect detection
+
+A 5-second window is also scored for **speech content**. When nothing is being spoken the result
+carries `kind='music'` or `kind='sfx'` instead of a language, and the widget shows *Music* / *Sound effect*
+instead of a (wrong) language.
+
+```python
+r = li.detect_audio(pcm, embed_fn=embed, vad_fn=vad)   # vad is optional
+r.kind          # 'speech' | 'music' | 'sfx'
+r.p_nonspeech   # 0..1
+```
+
+| Setting | Speech false-positives | Instrumental | Vocal music | Sound effects |
+|---|---|---|---|---|
+| **with VAD** (score 0.70) | **0.0 %** | 97.5 % | 75.0 % | 93.6 % |
+| without VAD, numpy only (0.85) | 0.0 % | 71.6 % | 68.3 % | 53.2 % |
+
+File-level cross-validation: 129 speech crops (8 languages, FLEURS), 22 instrumental and 20 vocal
+tracks, 70 Windows sound effects. `vad` comes from `eg2_langid.adapters.silero_vad.make_vad()`
+(needs `onnxruntime`; the model is optional — without it the numpy path still runs).
+
+**Limits, measured**
+- Singing is not reliably separated from speech — 75 % of vocal tracks are flagged, the rest show a
+  language (which is arguably correct: the lyrics *are* that language).
+- Music and sound effects are confused in ~20 % of cases (effect recall 78.7 %), so an alarm may be
+  labelled *Music*.
+- Trained on 112 source files; a broadcast jingle with heavy speech may still read as a language.
+
+**The head is separate from the language probe** — it scores the raw waveform (VAD ratio, 2–8 Hz
+envelope modulation, spectral centroid/flatness/flux, RMS dynamics) with a 11-number logistic
+regression, so it cannot degrade the 29-language accuracy (gold stays 0.9868).
+
 ### Live desktop widget
 
 Captures system audio (WASAPI loopback), keeps a 5-second ring buffer and re-judges every 2 s.

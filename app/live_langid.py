@@ -62,6 +62,8 @@ STR = {
         'model_load': 'model loaded in {t:.1f}s', 'capture_start': 'capture started',
         'capture_fail': 'capture failed: {e}', 'detect_fail': 'detect failed: {e}',
         'urdu_group': ' (incl. Urdu)', 'candidates': 'candidates: {s}',
+        'music': 'music', 'sfx': 'sound effect',
+        'non_speech_sub': 'no speech detected · {k} {p:.0f}%',
     },
     'ko': {
         'preparing': '준비 중…', 'silent': '무음', 'unknown': '판정 불가',
@@ -72,6 +74,8 @@ STR = {
         'model_load': '모델 로드 {t:.1f}s', 'capture_start': '캡처 시작',
         'capture_fail': '캡처 실패: {e}', 'detect_fail': '판정 실패: {e}',
         'urdu_group': ' (우르두 포함)', 'candidates': '후보 {s}',
+        'music': '음악', 'sfx': '효과음',
+        'non_speech_sub': '발화 없음 · {k} {p:.0f}%',
     },
 }
 
@@ -165,7 +169,7 @@ class LoopbackCapture(threading.Thread):
 
 class App:
     BG = '#14161a'; FG = '#e8eaed'; DIM = '#8b93a1'
-    OK = '#4ade80'; WARN = '#fbbf24'; NONE = '#6b7280'
+    OK = '#4ade80'; WARN = '#fbbf24'; NONE = '#6b7280'; NS_COLOR = '#a78bfa'
 
     def __init__(self):
         self.lang = detect_ui_language()
@@ -173,6 +177,7 @@ class App:
         self.names = DISPLAY if self.lang == 'ko' else DISPLAY_EN
         self.li = LanguageIdentifier()
         self.embed = None
+        self.vad = None
         self.embed_err = None
         self.cap = None
         self.paused = False
@@ -250,6 +255,11 @@ class App:
         t0 = time.time()
         try:
             self.embed = make_embedder(threads=int(os.environ.get('EG2_THREADS', '2')))
+            try:
+                from eg2_langid.adapters.silero_vad import make_vad
+                self.vad = make_vad()
+            except Exception:
+                self.vad = None
             self.q.put(('status', self.T['model_load'].format(t=time.time() - t0)))
         except Exception as e:
             self.embed_err = f'{type(e).__name__}: {e}'
@@ -309,7 +319,8 @@ class App:
             return
         self.silent_run = 0
         try:
-            r = self.li.detect_audio(a, embed_fn=self.embed, window_sec=WINDOW_SEC)
+            r = self.li.detect_audio(a, embed_fn=self.embed, window_sec=WINDOW_SEC,
+                                     vad_fn=self.vad)
         except Exception as e:
             self.q.put(('error', self.T['detect_fail'].format(e=e)))
             return
@@ -317,6 +328,16 @@ class App:
 
     def _render(self, payload):
         r, sec = payload
+        if getattr(r, 'kind', 'speech') != 'speech':
+            color = self.NS_COLOR
+            self.dot.itemconfig(1, fill=color)
+            name = self.T.get(r.kind, r.kind)
+            self.name.config(text=name, fg=self.FG)
+            p = r.p_nonspeech or 0.0
+            self.conf.config(text=f'{p*100:.0f}%')
+            self._bar(min(p, 0.99), color)
+            self.sub.config(text=self.T['non_speech_sub'].format(k=name, p=p * 100))
+            return
         if r.unknown:
             self.dot.itemconfig(1, fill=self.WARN)
             self.name.config(text=self.T['unknown'], fg=self.DIM)
