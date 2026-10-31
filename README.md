@@ -231,8 +231,11 @@ verdict on screen instead of churning through the same frozen buffer.
 | state | before verification existed | fixed 6 s re-check | back-off (current) |
 |---|---|---|---|
 | silence | 0 % | 0 % | **0 %** |
-| playing music | 4–12 % | **23–48 %** | **1 %** (one ~30 % burst when music starts) |
-| speech | ~100 % | ~100 % | ~100 % |
+| playing music | 4–12 % | **23–48 %** | **1 %** (one ~32 % burst when music starts) |
+| speech | 69–146 % | 69–146 % | **69–146 %** |
+
+Speech is the expensive state: judging every 2 s means an embedding every 2 s. Raise `EG2_HOP` to 3–4 s
+if that matters more than refresh rate.
 
 The re-check costs one embedding, so running it every 6 s made music playback as expensive as speech.
 It now runs immediately when music appears, then backs off 6 → 12 → 20 s while music continues, and
