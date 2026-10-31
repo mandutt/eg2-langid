@@ -140,8 +140,10 @@ class LoopbackCapture(threading.Thread):
             with self.lock:                                     # 장치 레이트에 맞춰 버퍼 재할당
                 self.buf = np.zeros(int(self.window_sec * rate), np.float32)
                 self.new_samples = 0
+            block = int(rate * 0.2)
             while self.running:
-                raw = stream.read(int(rate * 0.2), exception_on_overflow=False)
+                t0 = time.perf_counter()
+                raw = stream.read(block, exception_on_overflow=False)
                 a = np.frombuffer(raw, dtype=np.float32)
                 if ch > 1:
                     a = a.reshape(-1, ch).mean(axis=1)
@@ -152,6 +154,10 @@ class LoopbackCapture(threading.Thread):
                     else:
                         self.buf = np.concatenate([self.buf[n:], a])
                     self.new_samples += n
+                # 무음일 때 WASAPI가 즉시 반환하면 이 루프가 CPU를 100% 태운다 → 최소 주기 보장
+                dt = time.perf_counter() - t0
+                if dt < 0.2:
+                    time.sleep(0.2 - dt)
             stream.stop_stream(); stream.close()
         except Exception as e:                      # 장치 없음/권한 등
             self.error = f'{type(e).__name__}: {e}'
