@@ -30,6 +30,7 @@ HOP_SEC = float(os.environ.get('EG2_HOP', '2.0'))        # 판정 주기(초) �
 IDLE_HOP_SEC = float(os.environ.get('EG2_IDLE_HOP', '4.0'))
 SILENCE_RMS = 5e-4      # 이보다 조용하면 임베딩 생략 (디지털 무음은 0)
 HYBRID = os.environ.get('EG2_HYBRID', '0') == '1'   # 신호+프로브 반응(느림, 기본 꺼짐)
+HOLD_SEC = float(os.environ.get('EG2_HOLD', '12'))  # 음악 구간에서 최근 언어를 유지하는 시간(초)
 
 DISPLAY = {                      # 한국어 표기 (OS가 한국어일 때)
     'ko_kr': '한국어', 'en_us': '영어', 'ja_jp': '일본어', 'cmn_hans_cn': '중국어(간체)',
@@ -64,6 +65,7 @@ STR = {
         'capture_fail': 'capture failed: {e}', 'detect_fail': 'detect failed: {e}',
         'urdu_group': ' (incl. Urdu)', 'candidates': 'candidates: {s}',
         'music': 'music', 'sfx': 'sound effect',
+        'hold': 'music section · holding {lang}',
         'non_speech_sub': 'no speech detected · {k} {p:.0f}%',
     },
     'ko': {
@@ -76,6 +78,7 @@ STR = {
         'capture_fail': '캡처 실패: {e}', 'detect_fail': '판정 실패: {e}',
         'urdu_group': ' (우르두 포함)', 'candidates': '후보 {s}',
         'music': '음악', 'sfx': '효과음',
+        'hold': '음악 구간 · 최근 언어 유지',
         'non_speech_sub': '발화 없음 · {k} {p:.0f}%',
     },
 }
@@ -183,6 +186,8 @@ class App:
         self.cap = None
         self.paused = False
         self.silent_run = 0          # 연속 무음 프레임 수
+        self.last_lang = None        # 최근 언어 판정(표시 유지용)
+        self.last_lang_t = 0.0
         self._last_samples = 0       # 마지막으로 판정한 시점의 캡처 샘플 수
         self.q: queue.Queue = queue.Queue()
 
@@ -330,6 +335,15 @@ class App:
     def _render(self, payload):
         r, sec = payload
         if getattr(r, 'kind', 'speech') != 'speech':
+            # 음악/효과음 구간이어도 최근에 언어가 나왔다면 잠시 유지 (인터뷰·게임 방송 UX)
+            age = time.time() - self.last_lang_t
+            if HOLD_SEC > 0 and self.last_lang and age < HOLD_SEC:
+                self.dot.itemconfig(1, fill=self.NONE)
+                self.name.config(text=self.last_lang, fg=self.DIM)
+                self.conf.config(text=f'-{age:.0f}s')
+                self._bar(0, self.NONE)
+                self.sub.config(text=self.T['hold'].format(lang=self.last_lang))
+                return
             color = self.NS_COLOR
             self.dot.itemconfig(1, fill=color)
             name = self.T.get(r.kind, r.kind)
@@ -348,6 +362,7 @@ class App:
             self.sub.config(text=self.T['candidates'].format(s=top)[:34])
             return
         label = self.names.get(r.label.split('/')[0], r.label)
+        self.last_lang, self.last_lang_t = label, time.time()
         if '/' in r.label:
             label += self.T['urdu_group']
         # 표시값 = 정답 확률(p_correct). 없으면 게이트 여유(confidence)로 폴백

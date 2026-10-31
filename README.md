@@ -204,6 +204,14 @@ verdict on screen instead of churning through the same frozen buffer.
 | `EG2_THREADS` | `2` | ONNX Runtime threads for the embedding session |
 | `EG2_DEBUG` | — | print `rms` / skip reason per tick |
 | `EG2_LANG` | OS locale | widget language: `en` or `ko` |
+| `EG2_HOLD` | `12` | seconds a language stays on screen when the audio turns to music |
+| `EG2_HYBRID` | `0` | `1` = also use the probe reaction for music detection (slower) |
+
+**Holding the last language.** An interview over loud background music, or a game stream where the
+host pauses to talk to chat, contains windows that really are music-only. Instead of flipping to
+*Music* the moment speech stops, the widget keeps the last language visible for `EG2_HOLD` seconds
+with a dimmed dot and `music section · holding Korean` / `음악 구간 · 최근 언어 유지`. Only after that
+does it show *Music*.
 
 The widget is **English by default** and switches to **Korean** when the Windows UI language is
 Korean (`GetUserDefaultUILanguage()` = 0x0412). Language names and every status line follow that
