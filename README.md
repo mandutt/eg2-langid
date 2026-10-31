@@ -1,5 +1,7 @@
 # eg2-langid
 
+**English** | [한국어](README.ko.md)
+
 Lightweight **language identification from audio**, built on EmbeddingGemma 2 audio embeddings.
 
 A 187 KB linear classifier on top of a 768-dim audio embedding space — **29 languages**,
