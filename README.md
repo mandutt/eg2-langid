@@ -109,6 +109,11 @@ verdict on screen instead of churning through the same frozen buffer.
 | `EG2_IDLE_HOP` | `4.0` | slower poll while nothing is playing |
 | `EG2_THREADS` | `2` | ONNX Runtime threads for the embedding session |
 | `EG2_DEBUG` | — | print `rms` / skip reason per tick |
+| `EG2_LANG` | OS locale | widget language: `en` or `ko` |
+
+The widget is **English by default** and switches to **Korean** when the Windows UI language is
+Korean (`GetUserDefaultUILanguage()` = 0x0412). Language names and every status line follow that
+choice; override it with `EG2_LANG=ko` or `EG2_LANG=en`. The percentage shown is `p_correct`.
 
 ## Supported languages (29)
 

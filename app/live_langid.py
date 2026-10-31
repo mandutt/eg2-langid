@@ -30,7 +30,7 @@ HOP_SEC = float(os.environ.get('EG2_HOP', '2.0'))        # 판정 주기(초) �
 IDLE_HOP_SEC = float(os.environ.get('EG2_IDLE_HOP', '4.0'))
 SILENCE_RMS = 5e-4      # 이보다 조용하면 임베딩 생략 (디지털 무음은 0)
 
-DISPLAY = {
+DISPLAY = {                      # 한국어 표기 (OS가 한국어일 때)
     'ko_kr': '한국어', 'en_us': '영어', 'ja_jp': '일본어', 'cmn_hans_cn': '중국어(간체)',
     'de_de': '독일어', 'es_419': '스페인어', 'fr_fr': '프랑스어', 'it_it': '이탈리아어',
     'pt_br': '포르투갈어', 'nl_nl': '네덜란드어', 'pl_pl': '폴란드어', 'ru_ru': '러시아어',
@@ -40,6 +40,63 @@ DISPLAY = {
     'fa_ir': '페르시아어', 'cs_cz': '체코어', 'hr_hr': '크로아티아어', 'hy_am': '아르메니아어',
     'sw_ke': '스와힐리어',
 }
+
+DISPLAY_EN = {                   # English labels (default)
+    'ko_kr': 'Korean', 'en_us': 'English', 'ja_jp': 'Japanese', 'cmn_hans_cn': 'Chinese',
+    'de_de': 'German', 'es_419': 'Spanish', 'fr_fr': 'French', 'it_it': 'Italian',
+    'pt_br': 'Portuguese', 'nl_nl': 'Dutch', 'pl_pl': 'Polish', 'ru_ru': 'Russian',
+    'sv_se': 'Swedish', 'uk_ua': 'Ukrainian', 'hi_in': 'Hindi', 'ar_eg': 'Arabic',
+    'th_th': 'Thai', 'tr_tr': 'Turkish', 'vi_vn': 'Vietnamese', 'fil_ph': 'Filipino',
+    'id_id': 'Indonesian', 'ms_my': 'Malay', 'ur_pk': 'Urdu', 'da_dk': 'Danish',
+    'fa_ir': 'Persian', 'cs_cz': 'Czech', 'hr_hr': 'Croatian', 'hy_am': 'Armenian',
+    'sw_ke': 'Swahili',
+}
+
+STR = {
+    'en': {
+        'preparing': 'starting…', 'silent': 'silent', 'unknown': 'unknown',
+        'error': 'error', 'pause': 'Pause / resume', 'quit': 'Quit',
+        'wait_speech': 'waiting for speech · embedding skipped',
+        'wait_input': 'no input — idle',
+        'wait_sound': 'waiting for sound…',
+        'model_load': 'model loaded in {t:.1f}s', 'capture_start': 'capture started',
+        'capture_fail': 'capture failed: {e}', 'detect_fail': 'detect failed: {e}',
+        'urdu_group': ' (incl. Urdu)', 'candidates': 'candidates: {s}',
+    },
+    'ko': {
+        'preparing': '준비 중…', 'silent': '무음', 'unknown': '판정 불가',
+        'error': '오류', 'pause': '일시정지 / 재개', 'quit': '종료',
+        'wait_speech': '발화 대기 중 · 임베딩 생략',
+        'wait_input': '입력 없음 — 대기',
+        'wait_sound': '소리 기다리는 중…',
+        'model_load': '모델 로드 {t:.1f}s', 'capture_start': '캡처 시작',
+        'capture_fail': '캡처 실패: {e}', 'detect_fail': '판정 실패: {e}',
+        'urdu_group': ' (우르두 포함)', 'candidates': '후보 {s}',
+    },
+}
+
+
+def detect_ui_language() -> str:
+    """OS UI 언어가 한국어면 'ko', 아니면 'en'. EG2_LANG=ko|en 으로 강제 가능."""
+    force = os.environ.get('EG2_LANG', '').strip().lower()
+    if force.startswith('ko'):
+        return 'ko'
+    if force.startswith('en'):
+        return 'en'
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            langid = ctypes.windll.kernel32.GetUserDefaultUILanguage()
+            return 'ko' if (langid & 0x3FF) == 0x12 else 'en'   # 0x12 = Korean
+        except Exception:
+            pass
+    import locale
+    try:
+        loc = locale.getlocale()[0] or ''
+    except Exception:
+        loc = ''
+    loc = loc or os.environ.get('LC_ALL') or os.environ.get('LANG') or ''
+    return 'ko' if loc.lower().startswith('ko') else 'en'
 
 
 class LoopbackCapture(threading.Thread):
@@ -111,6 +168,9 @@ class App:
     OK = '#4ade80'; WARN = '#fbbf24'; NONE = '#6b7280'
 
     def __init__(self):
+        self.lang = detect_ui_language()
+        self.T = STR[self.lang]
+        self.names = DISPLAY if self.lang == 'ko' else DISPLAY_EN
         self.li = LanguageIdentifier()
         self.embed = None
         self.embed_err = None
@@ -133,7 +193,7 @@ class App:
         self.dot = tk.Canvas(top, width=10, height=10, bg=self.BG, highlightthickness=0)
         self.dot.create_oval(1, 1, 9, 9, fill=self.NONE, outline='')
         self.dot.pack(side='left', pady=(4, 0))
-        self.name = tk.Label(top, text='준비 중…', font=('Segoe UI', 15, 'bold'),
+        self.name = tk.Label(top, text=self.T['preparing'], font=('Segoe UI', 15, 'bold'),
                              fg=self.FG, bg=self.BG)
         self.name.pack(side='left', padx=8)
         self.conf = tk.Label(top, text='', font=('Consolas', 10), fg=self.DIM, bg=self.BG)
@@ -158,9 +218,9 @@ class App:
             widget.bind('<B1-Motion>', self._drag_move)
             widget.bind('<Button-3>', self._menu)
         self.menu = tk.Menu(self.root, tearoff=0)
-        self.menu.add_command(label='일시정지 / 재개', command=self._toggle_pause)
+        self.menu.add_command(label=self.T['pause'], command=self._toggle_pause)
         self.menu.add_separator()
-        self.menu.add_command(label='종료', command=self.quit)
+        self.menu.add_command(label=self.T['quit'], command=self.quit)
         self._dx = self._dy = 0
 
         threading.Thread(target=self._load_model, daemon=True).start()
@@ -190,7 +250,7 @@ class App:
         t0 = time.time()
         try:
             self.embed = make_embedder(threads=int(os.environ.get('EG2_THREADS', '2')))
-            self.q.put(('status', f'모델 로드 {time.time()-t0:.1f}s'))
+            self.q.put(('status', self.T['model_load'].format(t=time.time() - t0)))
         except Exception as e:
             self.embed_err = f'{type(e).__name__}: {e}'
             self.q.put(('error', self.embed_err))
@@ -199,9 +259,9 @@ class App:
         try:
             self.cap = LoopbackCapture()
             self.cap.start()
-            self.q.put(('status', '캡처 시작'))
+            self.q.put(('status', self.T['capture_start']))
         except Exception as e:
-            self.q.put(('error', f'캡처 실패: {e}'))
+            self.q.put(('error', self.T['capture_fail'].format(e=e)))
 
     # ── 메인 루프
     def _poll(self):
@@ -224,8 +284,9 @@ class App:
         """1초마다 창 하나 판정 (별도 스레드에서 호출)."""
         if self.embed is None or self.cap is None or self.paused:
             return
-        if self.cap.seconds_buffered() < 1.0:
-            self.q.put(('status', '소리 기다리는 중…'))
+        if self.cap.seconds_buffered() < 1.0:      # 아직 오디오가 흐르지 않음
+            self.silent_run += 1
+            self.q.put(('silent', self.silent_run))
             return
         a = self.cap.snapshot(WINDOW_SEC)
         a = self.cap.resample_to(a, SR)
@@ -250,7 +311,7 @@ class App:
         try:
             r = self.li.detect_audio(a, embed_fn=self.embed, window_sec=WINDOW_SEC)
         except Exception as e:
-            self.q.put(('error', f'판정 실패: {e}'))
+            self.q.put(('error', self.T['detect_fail'].format(e=e)))
             return
         self.q.put(('result', (r, len(a) / SR)))
 
@@ -258,16 +319,17 @@ class App:
         r, sec = payload
         if r.unknown:
             self.dot.itemconfig(1, fill=self.WARN)
-            self.name.config(text='판정 불가', fg=self.DIM)
-            self.conf.config(text=f'{sec:.0f}초')
+            self.name.config(text=self.T['unknown'], fg=self.DIM)
+            self.conf.config(text=f'{sec:.0f}s')
             self._bar(0, self.WARN)
             top = ' · '.join(list(r.scores)[:2])
-            self.sub.config(text=f'후보 {top}'[:34])
+            self.sub.config(text=self.T['candidates'].format(s=top)[:34])
             return
-        label = DISPLAY.get(r.label.split('/')[0], r.label)
+        label = self.names.get(r.label.split('/')[0], r.label)
         if '/' in r.label:
-            label += ' (우르두 포함)'
-        conf = r.confidence
+            label += self.T['urdu_group']
+        # 표시값 = 정답 확률(p_correct). 없으면 게이트 여유(confidence)로 폴백
+        conf = r.p_correct if r.p_correct is not None else r.confidence
         color = self.OK if conf >= 0.5 else self.WARN
         self.dot.itemconfig(1, fill=color)
         self.name.config(text=label, fg=self.FG)
@@ -277,10 +339,10 @@ class App:
 
     def _render_silent(self, run_count):
         self.dot.itemconfig(1, fill=self.NONE)
-        self.name.config(text='무음', fg=self.DIM)
+        self.name.config(text=self.T['silent'], fg=self.DIM)
         self.conf.config(text='')
         self._bar(0, self.NONE)
-        self.sub.config(text='발화 대기 중 · 임베딩 생략' if run_count < 3 else '입력 없음 — 대기')
+        self.sub.config(text=self.T['wait_speech'] if run_count < 3 else self.T['wait_input'])
 
     def _hop(self):
         return IDLE_HOP_SEC if self.silent_run >= 2 else HOP_SEC
@@ -292,7 +354,7 @@ class App:
 
     def _show_error(self, msg):
         self.dot.itemconfig(1, fill='#ef4444')
-        self.name.config(text='오류', fg='#ef4444')
+        self.name.config(text=self.T['error'], fg='#ef4444')
         self.sub.config(text=msg[:80])
 
     def run(self):
