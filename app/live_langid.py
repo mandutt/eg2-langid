@@ -189,6 +189,8 @@ class App:
         self.T = STR[self.lang]
         self.names = DISPLAY if self.lang == 'ko' else DISPLAY_EN
         self.li = LanguageIdentifier()
+        if os.environ.get('EG2_NOMUSIC') == '1':      # 음악/효과음 판정 비활성(비교 측정용)
+            self.li.ns.ok = False
         self.embed = None
         self.vad = None
         self.embed_err = None
