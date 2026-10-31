@@ -125,36 +125,67 @@ class LoopbackCapture(threading.Thread):
         self.running = True
         self.error: str | None = None
         self.device_name = ''
+        self._reopen = False
+        self._w = 0
 
     def run(self):
         pa = self.pa_mod.PyAudio()
-        try:
+        stream = None
+
+        def _open():
             dev = pa.get_default_wasapi_loopback()
             self.device_name = dev['name']
             ch = max(1, min(2, dev['maxInputChannels']))
             rate = int(dev['defaultSampleRate'])
-            stream = pa.open(format=self.pa_mod.paFloat32, channels=ch, rate=rate,
-                             input=True, input_device_index=dev['index'],
-                             frames_per_buffer=int(rate * 0.2))
+            s = pa.open(format=self.pa_mod.paFloat32, channels=ch, rate=rate,
+                        input=True, input_device_index=dev['index'],
+                        frames_per_buffer=int(rate * 0.2))
             self.sr = rate
-            with self.lock:                                     # 장치 레이트에 맞춰 버퍼 재할당
+            with self.lock:                             # 장치 레이트에 맞춰 버퍼 재할당
                 self.buf = np.zeros(int(self.window_sec * rate), np.float32)
                 self.new_samples = 0
+                self._w = 0
+            return s, ch, rate
+
+        try:
+            stream, ch, rate = _open()
             block = int(rate * 0.2)
             while self.running:
+                if self._reopen:                        # 워치독이 요청 → 스트림 재개방
+                    self._reopen = False
+                    try:
+                        stream.stop_stream(); stream.close()
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+                    stream, ch, rate = _open()
+                    block = int(rate * 0.2)
+                    print('[cap] stream reopened', flush=True)
                 t0 = time.perf_counter()
-                raw = stream.read(block, exception_on_overflow=False)
+                try:
+                    raw = stream.read(block, exception_on_overflow=False)
+                except Exception:
+                    time.sleep(0.2)
+                    continue
                 a = np.frombuffer(raw, dtype=np.float32)
                 if ch > 1:
                     a = a.reshape(-1, ch).mean(axis=1)
-                with self.lock:
+                with self.lock:                          # 인플레이스 링버퍼(재할당 없음)
                     n = len(a)
                     if n >= len(self.buf):
                         self.buf[:] = a[-len(self.buf):]
+                        self._w = 0
                     else:
-                        self.buf = np.concatenate([self.buf[n:], a])
+                        end = self._w + n
+                        if end <= len(self.buf):
+                            self.buf[self._w:end] = a
+                        else:
+                            k = len(self.buf) - self._w
+                            self.buf[self._w:] = a[:k]
+                            self.buf[:end - len(self.buf)] = a[k:]
+                        self._w = end % len(self.buf)
                     self.new_samples += n
-                # 무음일 때 WASAPI가 즉시 반환하면 이 루프가 CPU를 100% 태운다 → 최소 주기 보장
+                # 무음일 때 WASAPI가 즉시 반환하면 이 루프가 CPU를 태운다 → 최소 주기 보장
                 dt = time.perf_counter() - t0
                 if dt < 0.2:
                     time.sleep(0.2 - dt)
@@ -164,10 +195,19 @@ class LoopbackCapture(threading.Thread):
         finally:
             pa.terminate()
 
+    def request_reopen(self):
+        """스핀/장치 먹통 의심 시 스트림 재개방 요청."""
+        self._reopen = True
+
     def snapshot(self, sec: float) -> np.ndarray:
         with self.lock:
-            n = int(sec * self.sr)
-            return self.buf[-n:].copy()
+            n = min(int(sec * self.sr), len(self.buf))
+            if self._w == 0:
+                return self.buf[-n:].copy()
+            if self._w >= n:
+                return self.buf[self._w - n:self._w].copy()
+            out = np.concatenate([self.buf[self._w:], self.buf[:self._w]])
+            return out[-n:].copy()
 
     def seconds_buffered(self) -> float:
         with self.lock:
@@ -195,6 +235,7 @@ class App:
         self.vad = None
         self.embed_err = None
         self.cap = None
+        self._cpu_prev = None
         self.paused = False
         self.silent_run = 0          # 연속 무음 프레임 수
         self.last_lang = None        # 최근 언어 판정(표시 유지용)
@@ -314,6 +355,14 @@ class App:
         """1초마다 창 하나 판정 (별도 스레드에서 호출)."""
         if self.embed is None or self.cap is None or self.paused:
             return
+        # 워치독: 무음인데 프로세스가 CPU를 태우면(=루프백 스핀 등) 스트림을 재개방한다
+        cpu_now = time.process_time()
+        if self._cpu_prev is not None and self.silent_run >= 2:
+            if cpu_now - self._cpu_prev > 2.0:
+                self.cap.request_reopen()
+                print(f'[cap] watchdog: silent but {cpu_now - self._cpu_prev:.1f}s CPU → reopen',
+                      flush=True)
+        self._cpu_prev = cpu_now
         if self.cap.seconds_buffered() < 1.0:      # 아직 오디오가 흐르지 않음
             self.silent_run += 1
             self.q.put(('silent', self.silent_run))
