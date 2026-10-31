@@ -31,7 +31,8 @@ IDLE_HOP_SEC = float(os.environ.get('EG2_IDLE_HOP', '4.0'))
 SILENCE_RMS = 5e-4      # 이보다 조용하면 임베딩 생략 (디지털 무음은 0)
 HYBRID = os.environ.get('EG2_HYBRID', '0') == '1'   # 신호+프로브 반응(느림, 기본 꺼짐)
 HOLD_SEC = float(os.environ.get('EG2_HOLD', '20'))  # 음악 구간에서 최근 언어를 유지하는 시간(초)
-VERIFY_SEC = float(os.environ.get('EG2_VERIFY', '6'))  # 음악 판정 시 프로브로 재확인하는 최소 간격(초)
+VERIFY_SEC = float(os.environ.get('EG2_VERIFY', '6'))  # 음악 판정 시 프로브 재확인 시작 간격(초)
+VERIFY_MAX = float(os.environ.get('EG2_VERIFY_MAX', '20'))  # 음악이 계속될 때 최대 간격(초)
 VERIFY_MARGIN = float(os.environ.get('EG2_VERIFY_MARGIN', '0.4'))
 
 DISPLAY = {                      # 한국어 표기 (OS가 한국어일 때)
@@ -190,7 +191,9 @@ class App:
         self.silent_run = 0          # 연속 무음 프레임 수
         self.last_lang = None        # 최근 언어 판정(표시 유지용)
         self.last_lang_t = 0.0
-        self._last_verify = 0.0      # 마지막 프로브 재확인 시각
+        self._verify_next = 0.0      # 다음 재확인 허용 시각
+        self._verify_delay = VERIFY_SEC   # 현재 재확인 간격(음악이 이어지면 2배로)
+        self._last_kind = 'speech'
         self._last_samples = 0       # 마지막으로 판정한 시점의 캡처 샘플 수
         self.q: queue.Queue = queue.Queue()
 
@@ -328,13 +331,26 @@ class App:
             return
         self.silent_run = 0
         try:
-            # 음악 판정이 의심되면(배경음에 묻힌 발화) 제한적으로 프로브 재확인
-            verify = VERIFY_SEC > 0 and (time.time() - self._last_verify) >= VERIFY_SEC
+            # 음악 판정이 의심되면 프로브로 재확인하되, 음악이 계속되면 간격을 늘린다(지수 백오프).
+            # 전환 직후에는 즉시 확인해 언어 변경 지연을 최소화하고, 상시 음악에서는 비용을 줄인다.
+            now = time.time()
+            was_music = self._last_kind != 'speech'
+            verify = VERIFY_SEC > 0 and now >= self._verify_next
             if verify:
-                self._last_verify = time.time()
+                self._verify_next = now + max(1.0, self._verify_delay)
             r = self.li.detect_audio(a, embed_fn=self.embed, window_sec=WINDOW_SEC,
                                      vad_fn=self.vad, use_hybrid=HYBRID,
                                      verify_music=verify, verify_margin=VERIFY_MARGIN)
+            if os.environ.get('EG2_DEBUG') and verify:
+                print(f'[verify] t={now:.0f}s delay={self._verify_delay:.0f}s '
+                      f'was_music={was_music} → {r.kind}', flush=True)
+            if verify and was_music:
+                if r.kind == 'speech':
+                    self._verify_delay = VERIFY_SEC          # 발화를 건졌다 → 다시 촘촘히
+                    self._verify_next = now                    # 다음 창에서도 즉시 확인
+                else:
+                    self._verify_delay = min(VERIFY_MAX, max(VERIFY_SEC, self._verify_delay * 2))
+            self._last_kind = r.kind
         except Exception as e:
             self.q.put(('error', self.T['detect_fail'].format(e=e)))
             return

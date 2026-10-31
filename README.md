@@ -222,8 +222,22 @@ verdict on screen instead of churning through the same frozen buffer.
 | `EG2_DEBUG` | — | print `rms` / skip reason per tick |
 | `EG2_LANG` | OS locale | widget language: `en` or `ko` |
 | `EG2_HOLD` | `20` | seconds a language stays on screen when the audio turns to music |
-| `EG2_VERIFY` | `6` | when music is detected, re-check with the language probe at most this often (0 disables) |
+| `EG2_VERIFY` | `6` | first probe re-check interval after music appears (0 disables) |
+| `EG2_VERIFY_MAX` | `20` | back-off ceiling — the interval doubles while music keeps playing |
 | `EG2_VERIFY_MARGIN` | `0.4` | probe margin needed to overrule the music verdict |
+
+**CPU cost of the re-check, measured** (10-second samples of the running widget):
+
+| state | before verification existed | fixed 6 s re-check | back-off (current) |
+|---|---|---|---|
+| silence | 0 % | 0 % | **0 %** |
+| playing music | 4–12 % | **23–48 %** | **1 %** (one ~30 % burst when music starts) |
+| speech | ~100 % | ~100 % | ~100 % |
+
+The re-check costs one embedding, so running it every 6 s made music playback as expensive as speech.
+It now runs immediately when music appears, then backs off 6 → 12 → 20 s while music continues, and
+resets to 6 s the moment speech is found. Verified in the debug log: `[verify] delay=6 → 12 → 20`,
+then `→ speech` resets it.
 | `EG2_HYBRID` | `0` | `1` = also use the probe reaction for music detection (slower) |
 
 **Holding the last language.** An interview over loud background music, or a game stream where the
