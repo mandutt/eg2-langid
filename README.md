@@ -137,32 +137,32 @@ any EmbeddingGemma 2 ONNX build that exposes the sentence-embedding output works
 
 | Item | Value |
 |---|---|
-| Weight format | **int4 block quantization (`MatMulNBits`), `accuracy_level=4`** — "q4-al4" |
+| Weight format | **int8 block quantization — `MatMulNBits` with `bits=8`, `accuracy_level=4`** ("q8-al4") |
 | Files | audio encoder 340 MB + backbone 314 MB (**654 MB**) |
 | Resident memory | ≈ 0.6 GB |
 | Latency | 0.4–1.2 s per 27 s chunk (CPU, 4 threads) |
 
-Node-level check of the shipped build: 123 `MatMulNBits` in the audio encoder and 146 in the
-backbone — i.e. **int4 weights, not int8**.
+Node-level check of the shipped build: 123 `MatMulNBits` (bits=8) in the audio encoder and 146 in
+the backbone — i.e. **int8 weights**, matching the `*_quantized.onnx` variants published upstream.
 
-**Choosing a CPU quantization**
+**Why q8 on CPU**
 
-| Variant | Disk | RAM on CPU | Notes |
+| Variant | Disk | CPU memory | Notes |
 |---|---|---|---|
-| **q8** (dynamic int8) | ~2× q4 | **lowest of the three** | int8 weights + fp32 activations; on this model family we measured ≈466 MB commit vs ≈559 MB for q4f16 |
-| **q4-al4** | **smallest on disk** | ≈0.6 GB | int4 weights, int8 compute; the build behind every figure here |
-| q4f16 | small | **highest** | keeps fp16 activations alive — the worst choice when RAM is tight |
+| **q8 (int8 block)** | 654 MB | **lowest of the quantized set** | the build behind every figure here |
+| q4 (int4 block) | 363 MB | similar | available upstream (`*_q4.onnx`); smaller on disk, not benchmarked here |
+| q4f16 | 327 MB | **higher** | keeps fp16 activations alive — measured ≈559 MB commit vs ≈466 MB for q8 on this model family |
+| fp16 | 1.1 GB | highest | reference quality |
 
-Rule of thumb: **q8 if memory is the constraint, q4-al4 if disk size is the constraint.**
-q4f16 buys neither on CPU.
+On CPU, **q8 is the sweet spot**: int8 weights with int8 compute (`accuracy_level=4`) keep the
+working set smaller than q4f16 despite the larger file, because activations stay in a compact form.
+q4 only wins on disk size.
 
-**Do not run quantized weights on a GPU execution provider.** `MatMulNBits` / `MatMulInteger`
-have no DirectML or CUDA kernels — those nodes silently fall back to CPU, so you reserve GPU
-memory without getting GPU speed.
+**Do not run quantized weights on a GPU execution provider.** `MatMulNBits` has no DirectML or CUDA
+kernel — those nodes silently fall back to CPU, so you reserve GPU memory without getting GPU speed.
 
-> Honest note: q4-al4 and q8 were not compared head-to-head on the *audio encoder* here.
-> The adapter is quantization-agnostic, so either build runs, but the reported accuracy
-> corresponds to q4-al4.
+> Everything reported here was measured with the q8-al4 build. The upstream repo also publishes
+> fp32 / fp16 / q4 / q4f16 builds; switching is a file swap, and the adapter is quantization-agnostic.
 
 ## Limitations
 
