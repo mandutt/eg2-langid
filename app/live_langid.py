@@ -30,7 +30,9 @@ HOP_SEC = float(os.environ.get('EG2_HOP', '2.0'))        # 판정 주기(초) �
 IDLE_HOP_SEC = float(os.environ.get('EG2_IDLE_HOP', '4.0'))
 SILENCE_RMS = 5e-4      # 이보다 조용하면 임베딩 생략 (디지털 무음은 0)
 HYBRID = os.environ.get('EG2_HYBRID', '0') == '1'   # 신호+프로브 반응(느림, 기본 꺼짐)
-HOLD_SEC = float(os.environ.get('EG2_HOLD', '12'))  # 음악 구간에서 최근 언어를 유지하는 시간(초)
+HOLD_SEC = float(os.environ.get('EG2_HOLD', '20'))  # 음악 구간에서 최근 언어를 유지하는 시간(초)
+VERIFY_SEC = float(os.environ.get('EG2_VERIFY', '6'))  # 음악 판정 시 프로브로 재확인하는 최소 간격(초)
+VERIFY_MARGIN = float(os.environ.get('EG2_VERIFY_MARGIN', '0.4'))
 
 DISPLAY = {                      # 한국어 표기 (OS가 한국어일 때)
     'ko_kr': '한국어', 'en_us': '영어', 'ja_jp': '일본어', 'cmn_hans_cn': '중국어(간체)',
@@ -188,6 +190,7 @@ class App:
         self.silent_run = 0          # 연속 무음 프레임 수
         self.last_lang = None        # 최근 언어 판정(표시 유지용)
         self.last_lang_t = 0.0
+        self._last_verify = 0.0      # 마지막 프로브 재확인 시각
         self._last_samples = 0       # 마지막으로 판정한 시점의 캡처 샘플 수
         self.q: queue.Queue = queue.Queue()
 
@@ -325,8 +328,13 @@ class App:
             return
         self.silent_run = 0
         try:
+            # 음악 판정이 의심되면(배경음에 묻힌 발화) 제한적으로 프로브 재확인
+            verify = VERIFY_SEC > 0 and (time.time() - self._last_verify) >= VERIFY_SEC
+            if verify:
+                self._last_verify = time.time()
             r = self.li.detect_audio(a, embed_fn=self.embed, window_sec=WINDOW_SEC,
-                                     vad_fn=self.vad, use_hybrid=HYBRID)
+                                     vad_fn=self.vad, use_hybrid=HYBRID,
+                                     verify_music=verify, verify_margin=VERIFY_MARGIN)
         except Exception as e:
             self.q.put(('error', self.T['detect_fail'].format(e=e)))
             return

@@ -165,12 +165,16 @@ class LanguageIdentifier:
                      window_sec: float = 5.0, hop_sec: float | None = None,
                      sample_rate: int = SR,
                      vad_fn: Callable[[np.ndarray], float] | None = None,
-                     use_hybrid: bool = False) -> Result:
+                     use_hybrid: bool = False,
+                     verify_music: bool = False,
+                     verify_margin: float = 0.4) -> Result:
         """pcm(float32, mono)에서 최근 window_sec 구간을 임베딩해 판정.
         hop_sec을 주면 여러 창을 판정해 다수결 + 비중을 함께 반환.
         vad_fn을 주면 음악/효과음 검출 정확도가 올라갑니다(선택).
         use_hybrid=True → 신호 특징 + 프로브 반응(17특징)으로 비발화를 판정합니다. 다만 매 창마다
-        임베딩이 필요해 느립니다(기본값 False — 파형만으로 판정)."""
+        임베딩이 필요해 느립니다(기본값 False — 파형만으로 판정).
+        verify_music=True → 음악/효과음 판정이 나오면 임베딩으로 언어 프로브를 한 번 더 확인하고,
+        확신도(margin)가 verify_margin 이상이면 언어 판정을 채택합니다. 배경음에 묻힌 발화 구제용."""
         a = np.asarray(pcm, dtype=np.float32).ravel()
         sec = len(a) / sample_rate
         if sec < MIN_SEC:
@@ -185,7 +189,12 @@ class LanguageIdentifier:
                 if ns is not None:
                     return ns
                 return self.detect(vec, audio_sec=len(seg) / sample_rate)
-            ns = self._nonspeech(seg, vad_fn)
+            vec = embed_fn(np.ascontiguousarray(seg)) if verify_music else None
+            ns = self._nonspeech(seg, vad_fn, vec=vec, hybrid=use_hybrid)
+            if ns is not None and vec is not None:      # 음악 판정 → 프로브로 재확인
+                r = self.detect(vec, audio_sec=len(seg) / sample_rate)
+                if (not r.unknown) and r.margin >= verify_margin:
+                    return r
             if ns is not None:
                 return ns
             return self.detect(embed_fn(np.ascontiguousarray(seg)), audio_sec=len(seg) / sample_rate)

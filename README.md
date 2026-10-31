@@ -138,6 +138,23 @@ added — if at least 20 % of the window is detected as speech, the music verdic
 guardrail is the bigger lever; the price is that less music is flagged (95 % → 82 %) and vocal tracks
 may now show their lyrics' language instead of *Music*.
 
+**Verified on the two videos that exposed the bias** (5 minutes each, 60 windows):
+
+| | club interview (music under the voices) | game stream (SFX + music) |
+|---|---|---|
+| before | 23.3 % of windows called music | 48.3 % |
+| `verify_music` | **3.3 %** | 45.0 % |
+| with `EG2_HOLD=20` | **100 % of the time shows a language** | 90.0 % |
+
+The club case is real speech the VAD missed: on those windows the language probe still reported
+`en_us` with a margin of +0.59 (85 % of them above 0.4). So a music verdict now triggers one probe
+re-check (`verify_music`), rate-limited by `EG2_VERIFY` so music-only playback costs ~7 % CPU instead
+of a full embedding per window.
+
+The game stream is different — in the remaining 45 % of windows the probe has no language signal at
+all (margin +0.11, none above 0.4); that audio really is SFX only. The hold timer is what keeps the
+widget reading "Korean" through those stretches (12 s → 83 %, 20 s → 90 %, 30 s → 98 %).
+
 **Limits, measured**
 - Singing is not reliably separated from speech — 75 % of vocal tracks are flagged, the rest show a
   language (which is arguably correct: the lyrics *are* that language).
@@ -204,7 +221,9 @@ verdict on screen instead of churning through the same frozen buffer.
 | `EG2_THREADS` | `2` | ONNX Runtime threads for the embedding session |
 | `EG2_DEBUG` | — | print `rms` / skip reason per tick |
 | `EG2_LANG` | OS locale | widget language: `en` or `ko` |
-| `EG2_HOLD` | `12` | seconds a language stays on screen when the audio turns to music |
+| `EG2_HOLD` | `20` | seconds a language stays on screen when the audio turns to music |
+| `EG2_VERIFY` | `6` | when music is detected, re-check with the language probe at most this often (0 disables) |
+| `EG2_VERIFY_MARGIN` | `0.4` | probe margin needed to overrule the music verdict |
 | `EG2_HYBRID` | `0` | `1` = also use the probe reaction for music detection (slower) |
 
 **Holding the last language.** An interview over loud background music, or a game stream where the
