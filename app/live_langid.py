@@ -26,7 +26,9 @@ from eg2_langid.adapters.gemma2 import make_embedder  # noqa: E402
 
 SR = 16000
 WINDOW_SEC = 5.0
-HOP_SEC = 1.0
+HOP_SEC = float(os.environ.get('EG2_HOP', '2.0'))        # 판정 주기(초) — CPU와 직결
+IDLE_HOP_SEC = float(os.environ.get('EG2_IDLE_HOP', '4.0'))
+SILENCE_RMS = 5e-4      # 이보다 조용하면 임베딩 생략 (디지털 무음은 0)
 
 DISPLAY = {
     'ko_kr': '한국어', 'en_us': '영어', 'ja_jp': '일본어', 'cmn_hans_cn': '중국어(간체)',
@@ -114,6 +116,8 @@ class App:
         self.embed_err = None
         self.cap = None
         self.paused = False
+        self.silent_run = 0          # 연속 무음 프레임 수
+        self._last_samples = 0       # 마지막으로 판정한 시점의 캡처 샘플 수
         self.q: queue.Queue = queue.Queue()
 
         self.root = tk.Tk()
@@ -185,7 +189,7 @@ class App:
     def _load_model(self):
         t0 = time.time()
         try:
-            self.embed = make_embedder(threads=4)
+            self.embed = make_embedder(threads=int(os.environ.get('EG2_THREADS', '2')))
             self.q.put(('status', f'모델 로드 {time.time()-t0:.1f}s'))
         except Exception as e:
             self.embed_err = f'{type(e).__name__}: {e}'
@@ -208,6 +212,8 @@ class App:
                     self._render(payload)
                 elif kind == 'error':
                     self._show_error(payload)
+                elif kind == 'silent':
+                    self._render_silent(payload)
                 elif kind == 'status':
                     self.sub.config(text=payload)
         except queue.Empty:
@@ -223,6 +229,24 @@ class App:
             return
         a = self.cap.snapshot(WINDOW_SEC)
         a = self.cap.resample_to(a, SR)
+        if len(a) < SR // 2:
+            return
+        # ② 새 오디오가 없으면(재생 중단·정지) 임베딩 생략 — 같은 버퍼 재판정 방지
+        new = self.cap.new_samples
+        if new - self._last_samples < int(self.cap.sr * 0.4):
+            self.silent_run += 1
+            self.q.put(('silent', self.silent_run))
+            return
+        self._last_samples = new
+        rms = float(np.sqrt(np.mean(a * a)))
+        if os.environ.get('EG2_DEBUG'):
+            print(f'[tick] rms={rms:.6f} silent={"Y" if rms < SILENCE_RMS else "N"} '
+                  f'buf={len(a)/SR:.1f}s thr={SILENCE_RMS}', flush=True)
+        if rms < SILENCE_RMS:                 # 무음 → 임베딩 생략 (CPU 0)
+            self.silent_run += 1
+            self.q.put(('silent', self.silent_run))
+            return
+        self.silent_run = 0
         try:
             r = self.li.detect_audio(a, embed_fn=self.embed, window_sec=WINDOW_SEC)
         except Exception as e:
@@ -251,6 +275,16 @@ class App:
         self._bar(min(conf, 0.99), color)
         self.sub.config(text=f'margin {r.margin:.2f} · {sec:.0f}s window')
 
+    def _render_silent(self, run_count):
+        self.dot.itemconfig(1, fill=self.NONE)
+        self.name.config(text='무음', fg=self.DIM)
+        self.conf.config(text='')
+        self._bar(0, self.NONE)
+        self.sub.config(text='발화 대기 중 · 임베딩 생략' if run_count < 3 else '입력 없음 — 대기')
+
+    def _hop(self):
+        return IDLE_HOP_SEC if self.silent_run >= 2 else HOP_SEC
+
     def _bar(self, frac, color):
         w = self.bar.winfo_width() or 248
         self.bar.coords(self.bar_fill, 0, 0, max(0, int(w * frac)), 6)
@@ -264,7 +298,7 @@ class App:
     def run(self):
         def tick():
             threading.Thread(target=self._worker, daemon=True).start()
-            self.root.after(int(HOP_SEC * 1000), tick)
+            self.root.after(int(self._hop() * 1000), tick)
         self.root.after(1500, tick)
         self.root.mainloop()
 

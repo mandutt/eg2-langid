@@ -77,13 +77,25 @@ r = li.detect_audio(pcm_float32_16k, embed_fn=embed, window_sec=5.0)
 
 ### Live desktop widget
 
-Captures system audio (WASAPI loopback), keeps a 5-second ring buffer and updates once per second.
+Captures system audio (WASAPI loopback), keeps a 5-second ring buffer and re-judges every 2 s.
 
 ```bash
 python app/live_langid.py
 ```
 
 Drag anywhere to move · click **×** to close · right-click for pause / quit.
+
+**Nothing playing → no compute.** The widget embeds only when new audio has actually arrived, so a
+silent machine costs **0 % CPU** (measured). While something is playing it uses **≈1 core**
+(2 s hop on a 4-core box; measured 99 %, down from 210 % at a 1 s hop). The window keeps the last
+verdict on screen instead of churning through the same frozen buffer.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `EG2_HOP` | `2.0` | seconds between judgements (the main CPU lever) |
+| `EG2_IDLE_HOP` | `4.0` | slower poll while nothing is playing |
+| `EG2_THREADS` | `2` | ONNX Runtime threads for the embedding session |
+| `EG2_DEBUG` | — | print `rms` / skip reason per tick |
 
 ## Supported languages (29)
 
