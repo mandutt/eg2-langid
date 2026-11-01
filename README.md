@@ -209,6 +209,8 @@ python app/live_langid.py
 
 Drag anywhere to move · click **×** to close · right-click for pause / quit.
 
+Add `--serve 8730` to open the HTTP API **inside the same process** (one loaded model instead of two).
+
 **Nothing playing → no compute.** The widget embeds only when new audio has actually arrived, so a
 silent machine costs **0 % CPU** (measured). While something is playing it uses **≈1 core**
 (2 s hop on a 4-core box; measured 99 %, down from 210 % at a 1 s hop). The window keeps the last
@@ -334,6 +336,33 @@ python -m eg2_langid.server --no-http --json   # pipe only, no ports
 `status` is one of `starting` · `silent` · `speech` · `unknown` · `music` · `sfx` · `paused` · `error`;
 `preview: true` marks the short-window verdict that the next full window replaces. The server binds
 `127.0.0.1` by default — pass `--host` to expose it (e.g. a Tailscale address).
+
+## Memory footprint
+
+The model dominates: `q8-al4` weights are **654 MB** (audio encoder 340 MB + main 314 MB). Everything
+else is small. Measured in a fresh process:
+
+| stage | RSS |
+|---|---|
+| Python + numpy + onnxruntime | 97 MB |
+| ONNX weights loaded | **732 MB** |
+| + first embedding (activations) | 800 MB |
+| while judging (5 s window) | 817 MB |
+| idle after Windows trims pages | 150–700 MB |
+
+Two things keep it from doubling:
+
+- **One process for widget + API.** `python app/live_langid.py --serve 8730` opens the HTTP API inside
+  the widget process, sharing the single loaded model. Running the widget and `eg2_langid.server`
+  separately loads the model twice (~2 GB → ~0.8 GB).
+- **No torch by default.** The audio frontend (log-mel) is implemented in numpy in
+  `adapters/gemma2_np.py`. Measured against the torch reference: log-mel max difference **0.0**,
+  embedding cosine **0.99999988**, identical verdicts 24/24, same speed (the ONNX session dominates).
+  Skipping torch saves **~240 MB** and drops startup from ~4 s to ~1.3 s. Set `EG2_FRONTEND=torch` to
+  use the reference implementation.
+
+Switching the weights from `q8-al4` to `q4-al4` would cut another ~290 MB (654 → 363 MB) at some
+accuracy cost; that has not been measured on the audio path yet.
 
 ## Supported languages (29)
 

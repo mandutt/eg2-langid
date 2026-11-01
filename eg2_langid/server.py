@@ -168,6 +168,17 @@ def _decode(path: str) -> np.ndarray:
     return decode(path)
 
 
+def start_server(engine: LiveEngine, host: str = '127.0.0.1', port: int = DEFAULT_PORT,
+                 bus: Bus | None = None) -> tuple[ThreadingHTTPServer, threading.Thread]:
+    """이미 떠 있는 엔진에 HTTP API를 붙인다(모델을 다시 올리지 않는다)."""
+    bus = bus or Bus()
+    srv = ThreadingHTTPServer((host, port), make_handler(engine, bus))
+    srv.daemon_threads = True
+    th = threading.Thread(target=srv.serve_forever, daemon=True, name='eg2-http')
+    th.start()
+    return srv, th
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
     ap = argparse.ArgumentParser(prog='eg2_langid.server')
@@ -197,12 +208,12 @@ def main(argv: list[str] | None = None) -> int:
     engine.start()
 
     if not args.no_http:
-        srv = ThreadingHTTPServer((args.host, args.port), make_handler(engine, bus))
-        srv.daemon_threads = True
+        srv, _ = start_server(engine, args.host, args.port, bus)
         print(f'eg2-langid API  http://{args.host}:{args.port}  '
               f'(/now /events /detect /health)', file=sys.stderr, flush=True)
         try:
-            srv.serve_forever()
+            while True:
+                time.sleep(1)
         except KeyboardInterrupt:
             pass
         finally:

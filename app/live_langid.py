@@ -81,6 +81,19 @@ STR = {
 }
 
 
+def _serve_port(argv: list[str]) -> int | None:
+    """--serve[=PORT] / --serve PORT → 포트 번호, 없으면 None."""
+    for i, a in enumerate(argv):
+        if a == '--serve':
+            if i + 1 < len(argv) and argv[i + 1].isdigit():
+                return int(argv[i + 1])
+            return 8730
+        if a.startswith('--serve='):
+            v = a.split('=', 1)[1]
+            return int(v) if v.isdigit() else 8730
+    return None
+
+
 def detect_ui_language() -> str:
     """OS UI 언어가 한국어면 'ko', 아니면 'en'. EG2_LANG=ko|en 으로 강제 가능."""
     force = os.environ.get('EG2_LANG', '').strip().lower()
@@ -161,6 +174,17 @@ class App:
 
         # 판정 엔진 (캡처 + 임베딩 + 판정) — UI와 분리
         self.eng = LiveEngine(EngineConfig.from_env(window_sec=WINDOW_SEC))
+        # --serve: 같은 프로세스에서 HTTP API를 연다 (모델을 두 번 올리지 않음)
+        self.srv = None
+        srv_port = _serve_port(sys.argv)
+        if srv_port:
+            try:
+                from eg2_langid.server import start_server
+                self.srv, _ = start_server(self.eng, '127.0.0.1', srv_port)
+                print(f'API  http://127.0.0.1:{srv_port}  (/now /events /detect /health)',
+                      flush=True)
+            except Exception as e:
+                print(f'API 시작 실패: {type(e).__name__}: {e}', flush=True)
         if '--json' in sys.argv:          # stdout NDJSON (다른 프로그램이 읽어갈 수 있게)
             import json as _json
 
@@ -188,6 +212,11 @@ class App:
 
     def quit(self):
         self.eng.stop()
+        if self.srv is not None:
+            try:
+                self.srv.shutdown()
+            except Exception:
+                pass
         self.root.destroy()
 
     # ── 메인 루프

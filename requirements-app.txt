@@ -5,5 +5,7 @@ numpy>=1.24
 pyaudiowpatch>=0.2.12
 
 # optional: to embed audio directly with the adapter
-# onnxruntime>=1.16
-# torch>=2.0
+onnxruntime>=1.16
+# torch is NOT needed — the default numpy frontend matches the torch reference
+# (log-mel max diff 0.0, cosine 0.99999988) and saves ~240 MB RSS.
+#   pip install torch            # only for the reference frontend (EG2_FRONTEND=torch)

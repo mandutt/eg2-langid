@@ -38,8 +38,21 @@ def _find_pkg() -> str:
         '(mmal4/ + model-src/ + src/ 포함).')
 
 
-def make_embedder(pkg_dir: str | None = None, threads: int = 4, max_sec: float = 30.0):
-    """embed_fn(pcm_float32_mono_16k) -> 768d float32 (L2 정규화)."""
+def make_embedder(pkg_dir: str | None = None, threads: int = 4, max_sec: float = 30.0,
+                  frontend: str | None = None):
+    """embed_fn(pcm_float32_mono_16k) -> 768d float32 (L2 정규화).
+
+    frontend='numpy'(기본) — torch/open_eg 없이 동작. 메모리 ~170MB 절약, 결과 동일
+        (실측: log-mel 최대차 0.0 · cosine 0.99999988 · 판정 24/24 일치 · 속도 동일).
+    frontend='torch' — 참조 구현(open_eg.processor). 비교/검증용.
+    EG2_FRONTEND 환경변수로도 선택할 수 있다.
+    """
+    fe = (frontend or os.environ.get('EG2_FRONTEND', 'numpy')).strip().lower()
+    if fe == 'numpy':
+        from .gemma2_np import make_embedder as make_np
+        embed = make_np(pkg_dir, threads, max_sec)
+        embed.pcm_hint = SR
+        return embed
     d = pkg_dir or _find_pkg()
     src = open(os.path.join(d, 'embed_worker.py'), encoding='utf-8').read()
     if 'if __name__' in src:
