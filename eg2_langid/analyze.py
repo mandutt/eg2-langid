@@ -110,11 +110,22 @@ def _smooth(vals: list, k: int = 3) -> list:
     return out
 
 
+def default_threads() -> int:
+    """배치 기본 스레드 — 물리 코어 추정(logical//2), 2~6 범위.
+
+    실측(12 logical = 6 physical): 1레인에서 threads 2→1.68, 4→3.14, 6→4.26, 8→4.37 창/s.
+    6을 넘기면 이득이 멈추므로 상한을 6으로 둔다.
+    """
+    import os as _os
+    logical = _os.cpu_count() or 4
+    return max(2, min(6, logical // 2))
+
+
 def analyze_file(path: str, window: float = 5.0, hop: float = 2.0,
-                 min_seg: float = 2.0, threads: int = 4, lang: str = 'ko',
+                 min_seg: float = 2.0, threads: int | None = None, lang: str = 'ko',
                  music: str = 'mark', music_margin: float = 0.3,
                  progress: Callable[[float, float], None] | None = None,
-                 embed: Callable | None = None) -> Analysis:
+                 embed: Callable | None = None, lanes: int | None = None) -> Analysis:
     """파일 전체를 창 단위로 판정해 구간·비중을 만든다.
 
     music='mark'(기본) — 음악/효과음 확률이 높아도 **언어 margin이 높으면 발화로 인정**한다.
@@ -126,11 +137,15 @@ def analyze_file(path: str, window: float = 5.0, hop: float = 2.0,
     from . import LanguageIdentifier
     from .adapters.gemma2 import make_embedder
 
+    if lanes is None:
+        # 실측(threads 6): 1레인 4.09 · 2레인 5.59 · 3레인 6.02 · 4레인 6.44 · 5레인 6.09 ·
+        # 6레인 6.91(정점) · 8레인 6.00 창/s, RSS +44→348MB. 물리 코어 수에서 꺾인다.
+        lanes = max(1, min(6, int(os.environ.get('EG2_LANES', default_threads()))))
     audio = decode(path)
     dur = len(audio) / SR
     li = LanguageIdentifier()
     if embed is None:                       # 여러 파일을 처리할 때는 한 번만 만들어 넘긴다
-        embed = make_embedder(threads=threads)
+        embed = make_embedder(threads=threads or default_threads())
     vad = None
     if music != 'off':
         try:
@@ -146,6 +161,10 @@ def analyze_file(path: str, window: float = 5.0, hop: float = 2.0,
     pos = 0
     last_end = 0.0     # 판정 구간은 겹치지 않게 이어 붙인다
     min_judge = int(min(window, 3.0) * SR)     # 창이 이보다 짧으면 판정 보류(파일 앞부분)
+
+    # 1단계 — 판정 대상 창을 먼저 확정한다(무음 판정은 임베딩이 필요 없다).
+    # 오디오는 이미 전부 메모리에 있으므로 조각은 (시작, 끝) 샘플 인덱스로만 들고 있는다.
+    jobs = []          # (kind, start, end, (s0, s1) | None)
     while pos < len(audio):
         start = last_end
         end = min((pos + step) / SR, dur)
@@ -153,19 +172,40 @@ def analyze_file(path: str, window: float = 5.0, hop: float = 2.0,
         rms = float(np.sqrt(np.mean(block * block))) if len(block) else 0.0
         if rms < SILENCE_RMS or end - start < 0.2:
             if end > last_end:
-                rows.append((start, end, 'silence', None, None))
+                jobs.append(('silence', start, end, None))
                 last_end = end
             pos += step
             continue
-        seg = audio[max(0, pos + step - win):pos + step]
-        if len(seg) < min_judge:               # 아직 비교할 오디오가 부족
+        s0, s1 = max(0, pos + step - win), pos + step
+        if s1 - s0 < min_judge:                # 아직 비교할 오디오가 부족
             pos += step
             continue
-        vec = embed(np.ascontiguousarray(seg))
-        r = li.detect(vec, audio_sec=len(seg) / SR)
+        jobs.append(('judge', start, end, (s0, s1)))
+        last_end = end
+        pos += step
+
+    # 2단계 — 임베딩만 병렬로(순서 보존). 스레드는 세션을 공유하므로 모델은 한 벌.
+    todo = [j[3] for j in jobs if j[0] == 'judge']
+    if todo and lanes and lanes > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(lanes, len(todo))) as ex:
+            vectors = list(ex.map(lambda se: embed(np.ascontiguousarray(audio[se[0]:se[1]])), todo))
+    else:
+        vectors = [embed(np.ascontiguousarray(audio[s0:s1])) for s0, s1 in todo]
+    vit = iter(vectors)
+
+    # 3단계 — 판정은 순서대로(스무딩·구간 병합이 시간 순서를 요구한다).
+    for kind, start, end, seg_idx in jobs:
+        if kind == 'silence':
+            rows.append((start, end, 'silence', None, None))
+            if progress:
+                progress(start, dur)
+            continue
+        vec = next(vit)
+        r = li.detect(vec, audio_sec=(seg_idx[1] - seg_idx[0]) / SR)
         p_ns = None
         if music != 'off':
-            p_ns, _, _ = li.ns.score(seg, vad, vec=None, hybrid=False)
+            p_ns, _, _ = li.ns.score(audio[seg_idx[0]:seg_idx[1]], vad, vec=None, hybrid=False)
         is_music = (music != 'off' and p_ns is not None and p_ns >= thr
                     and (music == 'gate' or r.margin < music_margin))
         if is_music:
@@ -174,10 +214,8 @@ def analyze_file(path: str, window: float = 5.0, hop: float = 2.0,
             rows.append((start, end, 'unknown', None, r.p_correct))
         else:
             rows.append((start, end, 'speech', r.label, r.p_correct))
-        last_end = end
         if progress:
             progress(start, dur)
-        pos += step
 
     if not rows:
         return Analysis(path=path, duration=dur, window_sec=window, hop_sec=hop, lang=lang)
@@ -283,7 +321,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument('--window', type=float, default=5.0)
     ap.add_argument('--hop', type=float, default=2.0)
     ap.add_argument('--min-seg', type=float, default=2.0)
-    ap.add_argument('--threads', type=int, default=4)
+    ap.add_argument('--threads', type=int, default=default_threads(),
+                    help='ONNX intra-op 스레드 (기본: 물리 코어 추정치, 최대 6)')
+    ap.add_argument('--lanes', type=int, default=None,
+                    help='동시 임베딩 레인 (기본 4, 세션 공유)')
     ap.add_argument('--json', dest='json_path')
     ap.add_argument('--lang', default=None, help='출력 언어 ko|en (기본: OS)')
     ap.add_argument('--music', choices=['mark', 'off', 'gate'], default='mark',
@@ -308,7 +349,7 @@ def main(argv: list[str] | None = None) -> int:
 
     a = analyze_file(args.file, window=args.window, hop=args.hop, min_seg=args.min_seg,
                      threads=args.threads, lang=lang, music=args.music,
-                     music_margin=args.music_margin, progress=prog)
+                     music_margin=args.music_margin, progress=prog, lanes=args.lanes)
     if not args.quiet and sys.stderr.isatty():
         sys.stderr.write('\r' + ' ' * 40 + '\r')
     print(format_text(a))
