@@ -228,6 +228,7 @@ verdict on screen instead of churning through the same frozen buffer.
 | `EG2_VERIFY` | `6` | first probe re-check interval after music appears (0 disables) |
 | `EG2_VERIFY_MAX` | `20` | back-off ceiling — the interval doubles while music keeps playing |
 | `EG2_VERIFY_MARGIN` | `0.4` | probe margin needed to overrule the music verdict |
+| `EG2_HYBRID` | `0` | `1` = also use the probe reaction for music detection (slower) |
 
 **CPU cost of the re-check, measured** (10-second samples of the running widget):
 
@@ -252,7 +253,6 @@ The re-check costs one embedding, so running it every 6 s made music playback as
 It now runs immediately when music appears, then backs off 6 → 12 → 20 s while music continues, and
 resets to 6 s the moment speech is found. Verified in the debug log: `[verify] delay=6 → 12 → 20`,
 then `→ speech` resets it.
-| `EG2_HYBRID` | `0` | `1` = also use the probe reaction for music detection (slower) |
 
 **Holding the last language.** An interview over loud background music, or a game stream where the
 host pauses to talk to chat, contains windows that really are music-only. Instead of flipping to
@@ -263,6 +263,48 @@ does it show *Music*.
 The widget is **English by default** and switches to **Korean** when the Windows UI language is
 Korean (`GetUserDefaultUILanguage()` = 0x0412). Language names and every status line follow that
 choice; override it with `EG2_LANG=ko` or `EG2_LANG=en`. The percentage shown is `p_correct`.
+
+## Analysing a whole file
+
+The live widget answers *what is playing now*. This answers *what language is spoken where* in a
+recording — segments with start/end times plus overall proportions.
+
+```bash
+python -m eg2_langid.analyze interview.mp4 --json timeline.json
+```
+
+```
+file: mix_ko_music_en.wav  0:37 (window 5s · hop 1s)
+
+    0:00–0:14     Korean           99%  (12 windows)
+    0:14–0:23     [music/sfx]
+    0:23–0:34     English          99%  (11 windows)
+    0:34–0:37     [silence]
+
+proportions (speech only): Korean 56.0% · English 44.0%
+unknown 0:00 (0.0%) · music 0:09 (24.3%) · silence 0:03 (8.1%)
+```
+
+File mode is not in a hurry, so it walks the audio with a **1 s hop** and merges windows into
+segments (3-window median smoothing, short runs absorbed).
+
+**Music handling is a policy choice** (`--music`), because excluding music badly is worse than not
+excluding it. Measured on a file with known truth (Korean 12 s → music 10 s → English 12 s → silence):
+
+| `--music` | behaviour | result on that file |
+|---|---|---|
+| **`mark`** (default) | music probability is required *and* the language margin must be low (< `--music-margin 0.3`) | ko 0–14 · **[music] 14–23** · en 23–34 · [silence] 34–37 |
+| `off` | no music judgement at all | ko **0–15** · en **15–34** — the music section is counted as language |
+| `gate` | music probability alone decides | a speaker over loud music can be swallowed |
+
+The margin rule is what makes `mark` safe: on the same file, music-only windows score margin
+0.02–0.11 while speech scores 0.62–0.85, so an interview over loud background music stays speech even
+when VAD drops below 0.2 — the exact failure mode that made music detection steal speech in the live
+widget.
+
+```bash
+python -m eg2_langid.analyze FILE --hop 1 --window 5 --min-seg 2 --music mark --json out.json
+```
 
 ## Supported languages (29)
 
