@@ -111,14 +111,17 @@ def _smooth(vals: list, k: int = 3) -> list:
 
 
 def default_threads() -> int:
-    """배치 기본 스레드 — 물리 코어 추정(logical//2), 2~6 범위.
+    """배치 기본 스레드 — 물리 코어 추정(logical//2)에서 4를 상한으로.
 
-    실측(12 logical = 6 physical): 1레인에서 threads 2→1.68, 4→3.14, 6→4.26, 8→4.37 창/s.
-    6을 넘기면 이득이 멈추므로 상한을 6으로 둔다.
+    실측(12 logical = 6 physical, 5초 클립 16개, 1레인):
+        threads 1→1.20 · 2→1.86 · 3→2.55 · 4→3.19 · 5→3.75 · 6→3.75 클립/s
+        프로세스 CPU 98 / 205 / 317 / 451 / 586 / **672%**
+    5와 6의 처리량이 같고 6은 CPU만 86%p 더 쓴다. 레인을 함께 쓰면(레인=스레드) 파일 4개
+    처리에서도 4/4=4.88 · 5/5=4.81 · 6/6=4.64 창/s 로 차이가 사라지므로 **4**를 기본으로 둔다.
     """
     import os as _os
     logical = _os.cpu_count() or 4
-    return max(2, min(6, logical // 2))
+    return max(2, min(4, logical // 2))
 
 
 def analyze_file(path: str, window: float = 5.0, hop: float = 2.0,
