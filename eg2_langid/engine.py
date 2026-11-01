@@ -30,6 +30,8 @@ class EngineConfig:
     verify_margin: float = 0.4       # 재확인에서 언어를 채택할 margin
     nomusic: bool = False            # 음악/효과음 판정 끔
     gap_sec: float = 0.4             # 이만큼 새 오디오가 없으면 무음으로 간주
+    preview_sec: float = 3.0         # 무음→발화 전환 시 미리보기 창(0=끔, 확인 중 표시)
+    mode: str = 'balanced'           # balanced | fast(창 3s·홉 1.5s) | precise
 
     @classmethod
     def from_env(cls, **overrides) -> 'EngineConfig':
@@ -45,7 +47,17 @@ class EngineConfig:
             verify_max=float(env.get('EG2_VERIFY_MAX', 20.0)),
             verify_margin=float(env.get('EG2_VERIFY_MARGIN', 0.4)),
             nomusic=env.get('EG2_NOMUSIC', '0') == '1',
+            preview_sec=float(env.get('EG2_PREVIEW', 3.0)),
+            mode=env.get('EG2_MODE', 'balanced').strip().lower(),
         )
+        # 모드 프리셋 — 개별 환경변수(EG2_WINDOW/EG2_HOP)가 있으면 그쪽이 우선
+        if cfg.mode == 'fast':
+            if 'EG2_WINDOW' not in env:
+                cfg.window_sec = 3.0
+            if 'EG2_HOP' not in env:
+                cfg.hop_sec = 1.5
+            if 'EG2_PREVIEW' not in env:
+                cfg.preview_sec = 2.0
         for k, v in overrides.items():
             setattr(cfg, k, v)
         return cfg
@@ -65,6 +77,7 @@ class State:
     kind: str = 'speech'
     window_sec: float = 5.0
     process_ms: int = 0              # 이번 판정에 걸린 계산 시간
+    preview: bool = False            # 미리보기(짧은 창) 판정 — 곧 확정으로 교체됨
     silent_run: int = 0
     error: str | None = None
     device: str = ''
@@ -191,7 +204,20 @@ class LiveEngine:
         if rms < self.cfg.silence_rms:               # 무음 → 임베딩 생략 (CPU 0)
             self._silent('wait_speech')
             return
+        onset = self.silent_run >= 1                 # 방금 무음에서 벗어남
         self.silent_run = 0
+        if onset and self.cfg.preview_sec > 0:       # 짧은 창으로 먼저 보여준다(체감 지연 ↓)
+            n = int(self.cfg.preview_sec * SR)
+            if len(a) >= n:
+                t0 = time.perf_counter()
+                r = self.li.detect(self.embed(np.ascontiguousarray(a[-n:])),
+                                   audio_sec=self.cfg.preview_sec)
+                self._emit('result', {'result': r, 'audio_sec': self.cfg.preview_sec,
+                                      'process_ms': int((time.perf_counter() - t0) * 1000),
+                                      'preview': True,
+                                      'status': self._status_of(r)})
+                self._last_kind = r.kind
+                return
         t0 = time.perf_counter()
         now = time.time()
         was_music = self._last_kind != 'speech'
@@ -255,6 +281,7 @@ class LiveEngine:
             st.confidence = r.confidence
             st.margin = r.margin
             st.process_ms = payload['process_ms']
+            st.preview = payload.get('preview', False)
             st.silent_run = 0
         elif kind == 'silent':
             st.status = 'silent'

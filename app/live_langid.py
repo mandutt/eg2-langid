@@ -61,6 +61,7 @@ STR = {
         'hold': 'music section · holding {lang}',
         'non_speech_sub': 'no speech detected · {k} {p:.0f}%',
         'latency': 'delay {w:.0f}s window + {p}ms',
+        'preview_sub': 'checking · {w:.0f}s window (confirms at 5s)',
     },
     'ko': {
         'preparing': '준비 중…', 'silent': '무음', 'unknown': '판정 불가',
@@ -75,6 +76,7 @@ STR = {
         'hold': '음악 구간 · 최근 언어 유지',
         'non_speech_sub': '발화 없음 · {k} {p:.0f}%',
         'latency': '지연 {w:.0f}초 창 + {p}ms',
+        'preview_sub': '확인 중 · {w:.0f}초 창 (5초에 확정)',
     },
 }
 
@@ -204,6 +206,7 @@ class App:
         r = payload['result']
         sec = payload['audio_sec']
         proc_ms = payload.get('process_ms', 0)
+        preview = bool(payload.get('preview'))
         self.silent_run = 0
         if getattr(r, 'kind', 'speech') != 'speech':
             # 음악/효과음 구간이어도 최근에 언어가 나왔다면 잠시 유지 (인터뷰·게임 방송 UX)
@@ -238,6 +241,13 @@ class App:
             label += self.T['urdu_group']
         # 표시값 = 정답 확률(p_correct). 없으면 게이트 여유(confidence)로 폴백
         conf = r.p_correct if r.p_correct is not None else r.confidence
+        if preview:                       # 미리보기 — 곧 확정으로 교체된다(흐린 표시)
+            self.dot.itemconfig(1, fill=self.NONE)
+            self.name.config(text=label, fg=self.DIM)
+            self.conf.config(text=f'{min(conf, 0.99)*100:.0f}%')
+            self._bar(min(conf, 0.99), self.NONE)
+            self.sub.config(text=self.T['preview_sub'].format(w=sec))
+            return
         color = self.OK if conf >= 0.5 else self.WARN
         self.dot.itemconfig(1, fill=color)
         self.name.config(text=label, fg=self.FG)

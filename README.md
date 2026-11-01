@@ -222,6 +222,9 @@ verdict on screen instead of churning through the same frozen buffer.
 | `EG2_DEBUG` | — | print `rms` / skip reason per tick |
 | `EG2_LANG` | OS locale | widget language: `en` or `ko` |
 | `EG2_HOLD` | `20` | seconds a language stays on screen when the audio turns to music |
+| `EG2_MODE` | `balanced` | `balanced` · `fast` (3 s window, 1.5 s hop) · `precise` |
+| `EG2_WINDOW` | `5` | judging window in seconds — the floor of the response delay |
+| `EG2_PREVIEW` | `3` | on speech onset, show a short-window verdict first, marked "checking" (0 disables) |
 | `EG2_VERIFY` | `6` | first probe re-check interval after music appears (0 disables) |
 | `EG2_VERIFY_MAX` | `20` | back-off ceiling — the interval doubles while music keeps playing |
 | `EG2_VERIFY_MARGIN` | `0.4` | probe margin needed to overrule the music verdict |
