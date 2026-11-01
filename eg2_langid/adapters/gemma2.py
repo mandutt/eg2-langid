@@ -50,7 +50,7 @@ def make_embedder(pkg_dir: str | None = None, threads: int = 4, max_sec: float =
     fe = (frontend or os.environ.get('EG2_FRONTEND', 'numpy')).strip().lower()
     if fe == 'numpy':
         from .gemma2_np import make_embedder as make_np
-        embed = make_np(pkg_dir, threads, max_sec)
+        embed = make_np(pkg_dir, threads, max_sec)   # EG2_AUDIO_ONNX/EG2_MAIN_ONNX 도 여기서 처리
         embed.pcm_hint = SR
         return embed
     d = pkg_dir or _find_pkg()

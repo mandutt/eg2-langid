@@ -91,17 +91,24 @@ def frame_mask(n_samples: int, n_frames: int) -> np.ndarray:
 
 
 def make_embedder(pkg_dir: str | None = None, threads: int = 4,
-                  max_sec: float = 30.0):
-    """embed_fn(pcm_float32_mono_16k) -> 768d float32 (L2 정규화). torch 없이 동작."""
+                  max_sec: float = 30.0, audio_onnx: str | None = None,
+                  main_onnx: str | None = None):
+    """embed_fn(pcm_float32_mono_16k) -> 768d float32 (L2 정규화). torch 없이 동작.
+
+    audio_onnx/main_onnx 로 다른 양자화 빌드(q4 등)를 직접 지정할 수 있다.
+    """
     import onnxruntime as ort
 
     pkg = find_pkg(pkg_dir)
     mm = os.path.join(pkg, 'mmal4')
+    # 다른 양자화 빌드(q4 등)는 환경변수로 지정할 수 있다
+    audio_onnx = audio_onnx or os.environ.get('EG2_AUDIO_ONNX')
+    main_onnx = main_onnx or os.environ.get('EG2_MAIN_ONNX')
     so = ort.SessionOptions()
     so.intra_op_num_threads = int(threads)
-    aenc = ort.InferenceSession(os.path.join(mm, 'audio_encoder_quantized_al4.onnx'),
+    aenc = ort.InferenceSession(audio_onnx or os.path.join(mm, 'audio_encoder_quantized_al4.onnx'),
                                 sess_options=so, providers=['CPUExecutionProvider'])
-    main_o = ort.InferenceSession(os.path.join(mm, 'model_quantized_al4.onnx'),
+    main_o = ort.InferenceSession(main_onnx or os.path.join(mm, 'model_quantized_al4.onnx'),
                                   sess_options=so, providers=['CPUExecutionProvider'])
     empty = np.zeros((0, 512), np.float32)
     max_n = int(max_sec * SR)

@@ -361,8 +361,29 @@ Two things keep it from doubling:
   Skipping torch saves **~240 MB** and drops startup from ~4 s to ~1.3 s. Set `EG2_FRONTEND=torch` to
   use the reference implementation.
 
-Switching the weights from `q8-al4` to `q4-al4` would cut another ~290 MB (654 → 363 MB) at some
-accuracy cost; that has not been measured on the audio path yet.
+### q4-al4 instead of q8-al4 (measured)
+
+The upstream repo publishes a 4-bit build; after injecting `accuracy_level=4` it is a drop-in swap.
+Measured on 100 clips (10 languages × 10, 5 s each) against the shipped q8-al4:
+
+| | q8-al4 (default) | q4-al4 |
+|---|---|---|
+| weights on disk | 654 MB | **363 MB** |
+| RSS after load | 731 MB | **509 MB** |
+| RSS while judging | 855 MB | **665 MB** |
+| embedding cost | 580 ms | 609 ms (**+5 %**) |
+| verdicts identical | — | **93 / 100** |
+| correct | 92 / 100 | 90 / 100 |
+
+So q4 buys ~190 MB of RSS for ~2 points of accuracy and 5 % speed. Default stays q8; to try q4:
+
+```bash
+export EG2_AUDIO_ONNX=/path/audio_encoder_q4_al4.onnx
+export EG2_MAIN_ONNX=/path/model_q4_al4.onnx
+```
+
+Building those two files: download `onnx/audio_encoder_q4.onnx` and `onnx/model_q4.onnx` (+`_data`)
+from `onnx-community/embeddinggemma-2-ONNX`, then set `accuracy_level=4` on every `MatMulNBits` node.
 
 ## Supported languages (29)
 
@@ -436,7 +457,7 @@ the backbone — i.e. **int8 weights**, matching the `*_quantized.onnx` variants
 | Variant | Disk | CPU memory | Notes |
 |---|---|---|---|
 | **q8 (int8 block)** | 654 MB | **lowest of the quantized set** | the build behind every figure here |
-| q4 (int4 block) | 363 MB | similar | available upstream (`*_q4.onnx`); smaller on disk, not benchmarked here |
+| q4 (int4 block) | **363 MB** | **lower** | measured: RSS 855 → 665 MB, **5 % slower**, verdicts 93/100 identical, accuracy 92 → 90 per 100 |
 | q4f16 | 327 MB | **higher** | keeps fp16 activations alive — measured ≈559 MB commit vs ≈466 MB for q8 on this model family |
 | fp16 | 1.1 GB | highest | reference quality |
 
