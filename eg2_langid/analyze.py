@@ -98,7 +98,7 @@ def decode(path: str) -> np.ndarray:
 
 
 def _smooth(vals: list, k: int = 3) -> list:
-    """짧은 뒤집기 제거 — 창 3개 중앙값."""
+    """짧은 뒤집기 제거 — 이웃 k개 다수결(가장 흔한 값)."""
     if k < 3 or len(vals) < 3:
         return vals
     out = list(vals)

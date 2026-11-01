@@ -367,12 +367,18 @@ Two structural notes:
 ```
 eg2_langid/          distributable package (numpy only, no model weights)
   detector.py        probe + group + pairwise head + unknown gate
+  capture.py         WASAPI loopback ring buffer (reopen + resample)
+  engine.py          LiveEngine — boot, judge loop, State for UI/API
+  analyze.py         whole-file timeline + proportions (CLI)
+  server.py          HTTP (/now /events /detect) + NDJSON
+  nonspeech.py       music / sfx detector (11 signal features + VAD guardrail)
   adapters/gemma2.py optional embedding adapter (onnxruntime / torch)
+  adapters/silero_vad.py  optional VAD adapter
   data/              model.npz (175 KB) + labels.json
   assets/            silero_vad.onnx (2.2 MB, MIT) + its LICENSE
-app/live_langid.py   live desktop widget (WASAPI loopback)
+app/live_langid.py   live desktop widget (Tk, thin frontend over LiveEngine)
 tools/               artifact export + reference embedder
-tests/               package self-test and end-to-end check
+tests/               self-tests: package, engine, analyze, server, e2e
 examples/            quickstart
 ```
 

@@ -351,12 +351,18 @@ python -m eg2_langid.server --no-http --json   # 포트 없이 파이프만
 ```
 eg2_langid/          배포 패키지 (numpy만, 모델 가중치 미포함)
   detector.py        프로브 + 그룹 처리 + 쌍별 헤드 + 미지 언어 게이트
+  capture.py         WASAPI 루프백 링버퍼 (재개방·리샘플)
+  engine.py          LiveEngine — 부팅·판정 루프·상태(UI/API 공용)
+  analyze.py         파일 전체 타임라인 + 비중 (CLI)
+  server.py          HTTP(/now /events /detect) + NDJSON
+  nonspeech.py       음악/효과음 판정 (신호특징 11개 + VAD 가드레일)
   adapters/gemma2.py 선택적 임베딩 어댑터 (onnxruntime / torch)
+  adapters/silero_vad.py  VAD 어댑터(선택)
   data/              model.npz (175KB) + labels.json
   assets/            silero_vad.onnx (2.2MB, MIT) + 라이선스
-app/live_langid.py   라이브 데스크톱 위젯 (WASAPI 루프백)
+app/live_langid.py   라이브 데스크톱 위젯 (Tk, LiveEngine 위의 얇은 프론트엔드)
 tools/               아티팩트 생성 + 참조 임베더
-tests/               패키지 자체 테스트 · 엔드투엔드 테스트
+tests/               자체 검사: 패키지·엔진·분석·API·E2E
 examples/            빠른 시작 예제
 ```
 
