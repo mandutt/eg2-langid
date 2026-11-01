@@ -16,6 +16,7 @@ existing EmbeddingGemma 2 ONNX runtime and consumes either raw audio or precompu
 - **Unknown-language gate** — rejects audio that matches no known language
 - **Live desktop widget** — shows the language of whatever is playing on the machine (5 s window)
 - **Streaming by design** — embeddings are computed, judged, and discarded; nothing is written to disk
+- **One supported build** — the classifier is fitted on **q8-al4** (int8 block, `accuracy_level=4`) embeddings; other quantizations run but shift verdicts in close language pairs (see [Model & quantization](#model--quantization))
 
 ## Measured results
 
@@ -465,11 +466,33 @@ On CPU, **q8 is the sweet spot**: int8 weights with int8 compute (`accuracy_leve
 working set smaller than q4f16 despite the larger file, because activations stay in a compact form.
 q4 only wins on disk size.
 
+**The shipped probe is trained on q8-al4 embeddings — keep the runtime matched.** `model.npz` was
+fitted on q8-al4 vectors, so **q8-al4 is the supported configuration**. Another build still runs (the
+probe is linear, so it is not tied to a quantizer), but the embedding drift moves decisions exactly
+where the margins are thin:
+
+| build vs q8-al4 | embedding cosine | margin \|Δ\| (median / p90) | verdicts changed | accuracy |
+|---|---|---|---|---|
+| q4 audio encoder only | 0.997 | 0.011 / 0.033 | 2 / 100 | 92 → 92 |
+| q4 backbone only | 0.987 | 0.037 / 0.083 | 3 / 100 | 92 → 89 |
+| all q4 | 0.984 | 0.043 / 0.088 | 4 / 100 | 92 → 90 |
+
+Every changed verdict landed in a **close pair** — Indonesian/Malay (margin ≈ 0.06) or
+Russian/Ukrainian (≈ 0.31) — where the drift is the same size as the margin. The other 27 languages
+have margins 0.5–0.75, i.e. **10–30× the drift**, and do not move.
+
+If you must ship q4: **retrain `model.npz` on q4 vectors** (`tools/export_artifact.py`, same
+procedure — re-embedding the 9,880 training vectors takes ≈1.6 h single-process) and never mix vectors
+from two builds in one index. The same clip already differs by cosine 0.997 between builds, which is
+enough to corrupt similarity search and duplicate detection.
+
 **Do not run quantized weights on a GPU execution provider.** `MatMulNBits` has no DirectML or CUDA
 kernel — those nodes silently fall back to CPU, so you reserve GPU memory without getting GPU speed.
 
-> Everything reported here was measured with the q8-al4 build. The upstream repo also publishes
-> fp32 / fp16 / q4 / q4f16 builds; switching is a file swap, and the adapter is quantization-agnostic.
+> Everything reported here was measured with the **q8-al4** build, and the bundled probe expects it.
+> The upstream repo also publishes fp32 / fp16 / q4 / q4f16 builds — the adapter accepts any of them as
+> a file swap (`EG2_AUDIO_ONNX` / `EG2_MAIN_ONNX`), but read the table above before switching: the build
+> and the probe have to match, and quantized variants cannot be mixed inside one vector index.
 
 ## Limitations
 
