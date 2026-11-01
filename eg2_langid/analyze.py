@@ -113,7 +113,8 @@ def _smooth(vals: list, k: int = 3) -> list:
 def analyze_file(path: str, window: float = 5.0, hop: float = 2.0,
                  min_seg: float = 2.0, threads: int = 4, lang: str = 'ko',
                  music: str = 'mark', music_margin: float = 0.3,
-                 progress: Callable[[float, float], None] | None = None) -> Analysis:
+                 progress: Callable[[float, float], None] | None = None,
+                 embed: Callable | None = None) -> Analysis:
     """파일 전체를 창 단위로 판정해 구간·비중을 만든다.
 
     music='mark'(기본) — 음악/효과음 확률이 높아도 **언어 margin이 높으면 발화로 인정**한다.
@@ -128,7 +129,8 @@ def analyze_file(path: str, window: float = 5.0, hop: float = 2.0,
     audio = decode(path)
     dur = len(audio) / SR
     li = LanguageIdentifier()
-    embed = make_embedder(threads=threads)
+    if embed is None:                       # 여러 파일을 처리할 때는 한 번만 만들어 넘긴다
+        embed = make_embedder(threads=threads)
     vad = None
     if music != 'off':
         try:
