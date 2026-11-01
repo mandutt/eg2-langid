@@ -90,7 +90,22 @@ def main():
         same = sum(li.detect(a).label == li.detect(b).label for a, b in zip(vt, vn))
         check('판정 일치', same == len(wavs), f'{same}/{len(wavs)}')
 
-    # ③ numpy 경로만 쓰는 별도 프로세스에서 torch가 로드되지 않아야 한다
+    # ③ 128 배수가 아닌 길이 — 패딩 경계에서 인덱스를 넘지 않고 참조와 일치해야 한다
+    odd = [int(s * SR) for s in (0.5, 1.37, 3.7, 7.03)]
+    bad = [n for n in odd if n % 128 == 0]
+    check('홀수 길이 준비', not bad, str(bad))
+    try:
+        vn_odd = [en(wavs[0][:n]) for n in odd]
+        check('홀수 길이 임베딩 L2=1', all(abs(float(np.linalg.norm(v)) - 1) < 1e-4 for v in vn_odd))
+        if have_torch:
+            vt_odd = [et(wavs[0][:n]) for n in odd]
+            cos_odd = [float(np.dot(a, b)) for a, b in zip(vt_odd, vn_odd)]
+            check('홀수 길이 torch↔numpy cosine > 0.9999', min(cos_odd) > 0.9999,
+                  f'min {min(cos_odd):.8f}')
+    except IndexError as e:
+        check('홀수 길이 인덱스 안전', False, str(e))
+
+    # ④ numpy 경로만 쓰는 별도 프로세스에서 torch가 로드되지 않아야 한다
     import subprocess
     code = ('import sys; sys.path.insert(0, r"%s"); '
             'from eg2_langid.adapters.gemma2_np import make_embedder; '

@@ -83,10 +83,18 @@ def log_mel(wav: np.ndarray) -> np.ndarray:
     return np.log(mel + MEL_FLOOR).astype(np.float32)
 
 
-def frame_mask(n_samples: int, n_frames: int) -> np.ndarray:
-    """실제 샘플만 포함한 프레임만 True (패딩 구간 제외)."""
+def frame_mask(n_samples: int, n_frames: int, total: int | None = None) -> np.ndarray:
+    """실제 샘플만 포함한 프레임만 True (패딩 구간 제외).
+
+    ``n_samples`` = 실제 샘플 수, ``total`` = 128 배수로 패딩한 길이(경계 계산용).
+    참조 구현(open_eg.processor.preprocess_audio)과 동일하게, 마스크 배열은 패딩 길이로
+    만들되 True 는 실제 구간에만 준다. total 을 생략하면 n_samples 로 계산한다.
+    128 배수가 아닌 클립에서 total 없이 호출하면 마지막 프레임이 인덱스를 넘는다.
+    """
+    total = n_samples if total is None else max(total, n_samples)
+    sm = np.zeros(FRAME // 2 + total, bool)
+    sm[FRAME // 2: FRAME // 2 + n_samples] = True
     ends = np.arange(n_frames) * HOP + FRAME
-    sm = np.concatenate([np.zeros(FRAME // 2, bool), np.ones(n_samples, bool)])
     return sm[ends]
 
 
@@ -119,7 +127,7 @@ def make_embedder(pkg_dir: str | None = None, threads: int = 4,
         longest = -(-n // 128) * 128                     # 128 배수로 패딩 (참조 구현과 동일)
         xp = np.pad(x, (0, longest - n)) if longest > n else x
         feats = log_mel(xp)[None]
-        fmask = frame_mask(n, feats.shape[1])[None]
+        fmask = frame_mask(n, feats.shape[1], total=longest)[None]
         af = aenc.run(['audio_features'],
                       {'input_features': feats, 'input_features_mask': fmask})[0]
         n_soft = int(fmask[0][::2][::2].sum())
