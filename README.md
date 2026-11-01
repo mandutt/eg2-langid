@@ -306,6 +306,35 @@ widget.
 python -m eg2_langid.analyze FILE --hop 1 --window 5 --min-seg 2 --music mark --json out.json
 ```
 
+## Real-time API
+
+The widget is just one frontend — the same engine can feed other programs.
+
+```bash
+python -m eg2_langid.server                    # http://127.0.0.1:8730
+python -m eg2_langid.server --json             # also NDJSON on stdout
+python app/live_langid.py --json               # widget + NDJSON
+python -m eg2_langid.server --no-http --json   # pipe only, no ports
+```
+
+| endpoint | returns |
+|---|---|
+| `GET /health` | `{ok, ready, device, window_sec}` |
+| `GET /now` | the latest verdict (one JSON object) |
+| `GET /events` | NDJSON stream — one line per verdict, keep-alive |
+| `POST /detect?window=5` | request body = audio bytes (wav/mp3/m4a/…) → one verdict |
+
+```json
+{"seq":42,"ts":1767225600.12,"status":"speech","lang":"ko_kr","label":"ko_kr",
+ "p_correct":0.99,"confidence":0.512,"margin":0.6307,"kind":"speech",
+ "window_sec":5.0,"process_ms":969,"preview":false,"silent_run":0,
+ "device":"스피커(Realtek(R) Audio) [Loopback]"}
+```
+
+`status` is one of `starting` · `silent` · `speech` · `unknown` · `music` · `sfx` · `paused` · `error`;
+`preview: true` marks the short-window verdict that the next full window replaces. The server binds
+`127.0.0.1` by default — pass `--host` to expose it (e.g. a Tailscale address).
+
 ## Supported languages (29)
 
 | Code | Language | Code | Language |

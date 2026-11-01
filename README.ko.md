@@ -290,6 +290,35 @@ python -m eg2_langid.analyze 인터뷰.mp4 --json timeline.json
 python -m eg2_langid.analyze FILE --hop 1 --window 5 --min-seg 2 --music mark --json out.json
 ```
 
+## 실시간 API
+
+위젯은 여러 출력 중 하나일 뿐이고, 같은 엔진을 다른 프로그램이 그대로 씁니다.
+
+```bash
+python -m eg2_langid.server                    # http://127.0.0.1:8730
+python -m eg2_langid.server --json             # stdout으로 NDJSON도
+python app/live_langid.py --json               # 위젯 + NDJSON
+python -m eg2_langid.server --no-http --json   # 포트 없이 파이프만
+```
+
+| 엔드포인트 | 반환 |
+|---|---|
+| `GET /health` | `{ok, ready, device, window_sec}` |
+| `GET /now` | 최신 판정 1건(JSON) |
+| `GET /events` | NDJSON 스트림 — 판정마다 한 줄, keep-alive |
+| `POST /detect?window=5` | 본문 = 오디오 파일 바이트(wav/mp3/m4a…) → 판정 1회 |
+
+```json
+{"seq":42,"ts":1767225600.12,"status":"speech","lang":"ko_kr","label":"ko_kr",
+ "p_correct":0.99,"confidence":0.512,"margin":0.6307,"kind":"speech",
+ "window_sec":5.0,"process_ms":969,"preview":false,"silent_run":0,
+ "device":"스피커(Realtek(R) Audio) [Loopback]"}
+```
+
+`status`는 `starting` · `silent` · `speech` · `unknown` · `music` · `sfx` · `paused` · `error` 중 하나이고,
+`preview: true`는 다음 창에서 확정으로 교체될 미리보기입니다. 서버는 기본적으로 `127.0.0.1`에만
+바인드하며, 외부 노출은 `--host`(예: Tailscale 주소)로 지정합니다.
+
 ## 지원 언어 (29개)
 
 | 코드 | 언어 | 코드 | 언어 |

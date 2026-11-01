@@ -161,6 +161,15 @@ class App:
 
         # 판정 엔진 (캡처 + 임베딩 + 판정) — UI와 분리
         self.eng = LiveEngine(EngineConfig.from_env(window_sec=WINDOW_SEC))
+        if '--json' in sys.argv:          # stdout NDJSON (다른 프로그램이 읽어갈 수 있게)
+            import json as _json
+
+            def _sink(kind, payload):
+                if kind not in ('result', 'silent', 'error'):
+                    return
+                ev = dict(self.eng.latest(), event=kind)
+                print(_json.dumps(ev, ensure_ascii=False), flush=True)
+            self.eng.on_event = _sink
         self.eng.start()
         self.root.after(300, self._poll)
 
