@@ -2,38 +2,28 @@
 """eg2-langid 라이브 창 — 지금 PC에서 나는 소리의 언어를 표시 (Tkinter, 항상 위).
 
 실행: python app/live_langid.py
-  · WASAPI 루프백(스피커 출력)을 5초 링버퍼로 캡처
-  · 1초마다 임베딩 → 언어/음악/불확실 표시
-  · 우클릭: 종료 · 일시정지
+  · 판정은 eg2_langid.engine.LiveEngine 이 담당 (캡처·임베딩·언어/음악 판정)
+  · 이 파일은 표시만 담당 — 우클릭: 종료 · 일시정지, 드래그: 창 이동
+  · 같은 엔진을 API/CLI가 그대로 쓴다 (eg2_langid.server / eg2_langid.analyze)
 
-의존: numpy, sounddevice(불필요), pyaudiowpatch, tkinter, + 임베딩 모델(별도 배치)
+의존: numpy, pyaudiowpatch, tkinter, + 임베딩 모델(별도 배치)
 """
 from __future__ import annotations
 
 import os
 import queue
 import sys
-import threading
 import time
 import tkinter as tk
 
-import numpy as np
-
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE)
-from eg2_langid import LanguageIdentifier          # noqa: E402
-from eg2_langid.adapters.gemma2 import make_embedder  # noqa: E402
+from eg2_langid.capture import LoopbackCapture, SR   # noqa: E402,F401  (테스트 호환 재노출)
+from eg2_langid.engine import EngineConfig, LiveEngine  # noqa: E402
 
-SR = 16000
-WINDOW_SEC = 5.0
-HOP_SEC = float(os.environ.get('EG2_HOP', '2.0'))        # 판정 주기(초) — CPU와 직결
-IDLE_HOP_SEC = float(os.environ.get('EG2_IDLE_HOP', '4.0'))
-SILENCE_RMS = 5e-4      # 이보다 조용하면 임베딩 생략 (디지털 무음은 0)
-HYBRID = os.environ.get('EG2_HYBRID', '0') == '1'   # 신호+프로브 반응(느림, 기본 꺼짐)
-HOLD_SEC = float(os.environ.get('EG2_HOLD', '20'))  # 음악 구간에서 최근 언어를 유지하는 시간(초)
-VERIFY_SEC = float(os.environ.get('EG2_VERIFY', '6'))  # 음악 판정 시 프로브 재확인 시작 간격(초)
-VERIFY_MAX = float(os.environ.get('EG2_VERIFY_MAX', '20'))  # 음악이 계속될 때 최대 간격(초)
-VERIFY_MARGIN = float(os.environ.get('EG2_VERIFY_MARGIN', '0.4'))
+WINDOW_SEC = float(os.environ.get('EG2_WINDOW', '5.0'))
+HOLD_SEC = float(os.environ.get('EG2_HOLD', '20'))   # 음악 구간에서 최근 언어를 유지하는 시간(초)
+SHOW_LATENCY = os.environ.get('EG2_LATENCY', '1') != '0'
 
 DISPLAY = {                      # 한국어 표기 (OS가 한국어일 때)
     'ko_kr': '한국어', 'en_us': '영어', 'ja_jp': '일본어', 'cmn_hans_cn': '중국어(간체)',
@@ -70,6 +60,7 @@ STR = {
         'music': 'music', 'sfx': 'sound effect',
         'hold': 'music section · holding {lang}',
         'non_speech_sub': 'no speech detected · {k} {p:.0f}%',
+        'latency': 'delay {w:.0f}s window + {p}ms',
     },
     'ko': {
         'preparing': '준비 중…', 'silent': '무음', 'unknown': '판정 불가',
@@ -83,6 +74,7 @@ STR = {
         'music': '음악', 'sfx': '효과음',
         'hold': '음악 구간 · 최근 언어 유지',
         'non_speech_sub': '발화 없음 · {k} {p:.0f}%',
+        'latency': '지연 {w:.0f}초 창 + {p}ms',
     },
 }
 
@@ -110,116 +102,6 @@ def detect_ui_language() -> str:
     return 'ko' if loc.lower().startswith('ko') else 'en'
 
 
-class LoopbackCapture(threading.Thread):
-    """WASAPI 루프백 캡처 → 최근 window_sec만 유지하는 링버퍼."""
-
-    def __init__(self, window_sec: float = WINDOW_SEC, sr: int = SR):
-        super().__init__(daemon=True)
-        import pyaudiowpatch as pyaudio
-        self.pa_mod = pyaudio
-        self.sr = sr
-        self.window_sec = window_sec
-        self.buf = np.zeros(int(window_sec * sr), np.float32)   # 실제 레이트 확정 후 재할당
-        self.lock = threading.Lock()
-        self.new_samples = 0
-        self.running = True
-        self.error: str | None = None
-        self.device_name = ''
-        self._reopen = False
-        self._w = 0
-
-    def run(self):
-        pa = self.pa_mod.PyAudio()
-        stream = None
-
-        def _open():
-            dev = pa.get_default_wasapi_loopback()
-            self.device_name = dev['name']
-            ch = max(1, min(2, dev['maxInputChannels']))
-            rate = int(dev['defaultSampleRate'])
-            s = pa.open(format=self.pa_mod.paFloat32, channels=ch, rate=rate,
-                        input=True, input_device_index=dev['index'],
-                        frames_per_buffer=int(rate * 0.2))
-            self.sr = rate
-            with self.lock:                             # 장치 레이트에 맞춰 버퍼 재할당
-                self.buf = np.zeros(int(self.window_sec * rate), np.float32)
-                self.new_samples = 0
-                self._w = 0
-            return s, ch, rate
-
-        try:
-            stream, ch, rate = _open()
-            block = int(rate * 0.2)
-            while self.running:
-                if self._reopen:                        # 워치독이 요청 → 스트림 재개방
-                    self._reopen = False
-                    try:
-                        stream.stop_stream(); stream.close()
-                    except Exception:
-                        pass
-                    time.sleep(0.5)
-                    stream, ch, rate = _open()
-                    block = int(rate * 0.2)
-                    print('[cap] stream reopened', flush=True)
-                t0 = time.perf_counter()
-                try:
-                    raw = stream.read(block, exception_on_overflow=False)
-                except Exception:
-                    time.sleep(0.2)
-                    continue
-                a = np.frombuffer(raw, dtype=np.float32)
-                if ch > 1:
-                    a = a.reshape(-1, ch).mean(axis=1)
-                with self.lock:                          # 인플레이스 링버퍼(재할당 없음)
-                    n = len(a)
-                    if n >= len(self.buf):
-                        self.buf[:] = a[-len(self.buf):]
-                        self._w = 0
-                    else:
-                        end = self._w + n
-                        if end <= len(self.buf):
-                            self.buf[self._w:end] = a
-                        else:
-                            k = len(self.buf) - self._w
-                            self.buf[self._w:] = a[:k]
-                            self.buf[:end - len(self.buf)] = a[k:]
-                        self._w = end % len(self.buf)
-                    self.new_samples += n
-                # 무음일 때 WASAPI가 즉시 반환하면 이 루프가 CPU를 태운다 → 최소 주기 보장
-                dt = time.perf_counter() - t0
-                if dt < 0.2:
-                    time.sleep(0.2 - dt)
-            stream.stop_stream(); stream.close()
-        except Exception as e:                      # 장치 없음/권한 등
-            self.error = f'{type(e).__name__}: {e}'
-        finally:
-            pa.terminate()
-
-    def request_reopen(self):
-        """스핀/장치 먹통 의심 시 스트림 재개방 요청."""
-        self._reopen = True
-
-    def snapshot(self, sec: float) -> np.ndarray:
-        with self.lock:
-            n = min(int(sec * self.sr), len(self.buf))
-            if self._w == 0:
-                return self.buf[-n:].copy()
-            if self._w >= n:
-                return self.buf[self._w - n:self._w].copy()
-            out = np.concatenate([self.buf[self._w:], self.buf[:self._w]])
-            return out[-n:].copy()
-
-    def seconds_buffered(self) -> float:
-        with self.lock:
-            return min(len(self.buf), self.new_samples) / self.sr
-
-    def resample_to(self, a: np.ndarray, target: int = SR) -> np.ndarray:
-        if self.sr == target or len(a) == 0:
-            return a.astype(np.float32)
-        n = int(len(a) * target / self.sr)
-        return np.interp(np.linspace(0, len(a) - 1, n), np.arange(len(a)), a).astype(np.float32)
-
-
 class App:
     BG = '#14161a'; FG = '#e8eaed'; DIM = '#8b93a1'
     OK = '#4ade80'; WARN = '#fbbf24'; NONE = '#6b7280'; NS_COLOR = '#a78bfa'
@@ -228,23 +110,9 @@ class App:
         self.lang = detect_ui_language()
         self.T = STR[self.lang]
         self.names = DISPLAY if self.lang == 'ko' else DISPLAY_EN
-        self.li = LanguageIdentifier()
-        if os.environ.get('EG2_NOMUSIC') == '1':      # 음악/효과음 판정 비활성(비교 측정용)
-            self.li.ns.ok = False
-        self.embed = None
-        self.vad = None
-        self.embed_err = None
-        self.cap = None
-        self._cpu_prev = None
-        self.paused = False
-        self.silent_run = 0          # 연속 무음 프레임 수
         self.last_lang = None        # 최근 언어 판정(표시 유지용)
         self.last_lang_t = 0.0
-        self._verify_next = 0.0      # 다음 재확인 허용 시각
-        self._verify_delay = VERIFY_SEC   # 현재 재확인 간격(음악이 이어지면 2배로)
-        self._last_kind = 'speech'
-        self._last_samples = 0       # 마지막으로 판정한 시점의 캡처 샘플 수
-        self.q: queue.Queue = queue.Queue()
+        self.silent_run = 0
 
         self.root = tk.Tk()
         self.root.title('eg2-langid')
@@ -289,9 +157,10 @@ class App:
         self.menu.add_command(label=self.T['quit'], command=self.quit)
         self._dx = self._dy = 0
 
-        threading.Thread(target=self._load_model, daemon=True).start()
+        # 판정 엔진 (캡처 + 임베딩 + 판정) — UI와 분리
+        self.eng = LiveEngine(EngineConfig.from_env(window_sec=WINDOW_SEC))
+        self.eng.start()
         self.root.after(300, self._poll)
-        self.root.after(200, self._start_capture)
 
     # ── Tk 이벤트
     def _drag_start(self, e):
@@ -304,117 +173,38 @@ class App:
         self.menu.tk_popup(e.x_root, e.y_root)
 
     def _toggle_pause(self):
-        self.paused = not self.paused
+        self.eng.pause(not self.eng.paused)
 
     def quit(self):
-        if self.cap:
-            self.cap.running = False
+        self.eng.stop()
         self.root.destroy()
-
-    # ── 백그라운드
-    def _load_model(self):
-        t0 = time.time()
-        try:
-            self.embed = make_embedder(threads=int(os.environ.get('EG2_THREADS', '2')))
-            try:
-                from eg2_langid.adapters.silero_vad import make_vad
-                self.vad = make_vad()
-            except Exception:
-                self.vad = None
-            self.q.put(('status', self.T['model_load'].format(t=time.time() - t0)))
-        except Exception as e:
-            self.embed_err = f'{type(e).__name__}: {e}'
-            self.q.put(('error', self.embed_err))
-
-    def _start_capture(self):
-        try:
-            self.cap = LoopbackCapture()
-            self.cap.start()
-            self.q.put(('status', self.T['capture_start']))
-        except Exception as e:
-            self.q.put(('error', self.T['capture_fail'].format(e=e)))
 
     # ── 메인 루프
     def _poll(self):
         try:
             while True:
-                kind, payload = self.q.get_nowait()
+                kind, payload = self.eng.q.get_nowait()
                 if kind == 'result':
                     self._render(payload)
                 elif kind == 'error':
-                    self._show_error(payload)
+                    self._show_error(payload['message'])
                 elif kind == 'silent':
-                    self._render_silent(payload)
+                    self._render_silent(payload['run'])
                 elif kind == 'status':
-                    self.sub.config(text=payload)
+                    key = payload.get('key')
+                    if key == 'model_load':
+                        self.sub.config(text=self.T['model_load'].format(t=payload['t']))
+                    elif key == 'capture_start':
+                        self.sub.config(text=self.T['capture_start'])
         except queue.Empty:
             pass
         self.root.after(150, self._poll)
 
-    def _worker(self):
-        """1초마다 창 하나 판정 (별도 스레드에서 호출)."""
-        if self.embed is None or self.cap is None or self.paused:
-            return
-        # 워치독: 무음인데 프로세스가 CPU를 태우면(=루프백 스핀 등) 스트림을 재개방한다
-        cpu_now = time.process_time()
-        if self._cpu_prev is not None and self.silent_run >= 2:
-            if cpu_now - self._cpu_prev > 2.0:
-                self.cap.request_reopen()
-                print(f'[cap] watchdog: silent but {cpu_now - self._cpu_prev:.1f}s CPU → reopen',
-                      flush=True)
-        self._cpu_prev = cpu_now
-        if self.cap.seconds_buffered() < 1.0:      # 아직 오디오가 흐르지 않음
-            self.silent_run += 1
-            self.q.put(('silent', self.silent_run))
-            return
-        a = self.cap.snapshot(WINDOW_SEC)
-        a = self.cap.resample_to(a, SR)
-        if len(a) < SR // 2:
-            return
-        # ② 새 오디오가 없으면(재생 중단·정지) 임베딩 생략 — 같은 버퍼 재판정 방지
-        new = self.cap.new_samples
-        if new - self._last_samples < int(self.cap.sr * 0.4):
-            self.silent_run += 1
-            self.q.put(('silent', self.silent_run))
-            return
-        self._last_samples = new
-        rms = float(np.sqrt(np.mean(a * a)))
-        if os.environ.get('EG2_DEBUG'):
-            print(f'[tick] rms={rms:.6f} silent={"Y" if rms < SILENCE_RMS else "N"} '
-                  f'buf={len(a)/SR:.1f}s thr={SILENCE_RMS}', flush=True)
-        if rms < SILENCE_RMS:                 # 무음 → 임베딩 생략 (CPU 0)
-            self.silent_run += 1
-            self.q.put(('silent', self.silent_run))
-            return
-        self.silent_run = 0
-        try:
-            # 음악 판정이 의심되면 프로브로 재확인하되, 음악이 계속되면 간격을 늘린다(지수 백오프).
-            # 전환 직후에는 즉시 확인해 언어 변경 지연을 최소화하고, 상시 음악에서는 비용을 줄인다.
-            now = time.time()
-            was_music = self._last_kind != 'speech'
-            verify = VERIFY_SEC > 0 and now >= self._verify_next
-            if verify:
-                self._verify_next = now + max(1.0, self._verify_delay)
-            r = self.li.detect_audio(a, embed_fn=self.embed, window_sec=WINDOW_SEC,
-                                     vad_fn=self.vad, use_hybrid=HYBRID,
-                                     verify_music=verify, verify_margin=VERIFY_MARGIN)
-            if os.environ.get('EG2_DEBUG') and verify:
-                print(f'[verify] t={now:.0f}s delay={self._verify_delay:.0f}s '
-                      f'was_music={was_music} → {r.kind}', flush=True)
-            if verify and was_music:
-                if r.kind == 'speech':
-                    self._verify_delay = VERIFY_SEC          # 발화를 건졌다 → 다시 촘촘히
-                    self._verify_next = now                    # 다음 창에서도 즉시 확인
-                else:
-                    self._verify_delay = min(VERIFY_MAX, max(VERIFY_SEC, self._verify_delay * 2))
-            self._last_kind = r.kind
-        except Exception as e:
-            self.q.put(('error', self.T['detect_fail'].format(e=e)))
-            return
-        self.q.put(('result', (r, len(a) / SR)))
-
     def _render(self, payload):
-        r, sec = payload
+        r = payload['result']
+        sec = payload['audio_sec']
+        proc_ms = payload.get('process_ms', 0)
+        self.silent_run = 0
         if getattr(r, 'kind', 'speech') != 'speech':
             # 음악/효과음 구간이어도 최근에 언어가 나왔다면 잠시 유지 (인터뷰·게임 방송 UX)
             age = time.time() - self.last_lang_t
@@ -453,17 +243,18 @@ class App:
         self.name.config(text=label, fg=self.FG)
         self.conf.config(text=f'{min(conf, 0.99)*100:.0f}%')
         self._bar(min(conf, 0.99), color)
-        self.sub.config(text=f'margin {r.margin:.2f} · {sec:.0f}s window')
+        if SHOW_LATENCY:
+            self.sub.config(text=self.T['latency'].format(w=WINDOW_SEC, p=proc_ms))
+        else:
+            self.sub.config(text=f'margin {r.margin:.2f} · {sec:.0f}s window')
 
     def _render_silent(self, run_count):
+        self.silent_run = run_count
         self.dot.itemconfig(1, fill=self.NONE)
         self.name.config(text=self.T['silent'], fg=self.DIM)
         self.conf.config(text='')
         self._bar(0, self.NONE)
         self.sub.config(text=self.T['wait_speech'] if run_count < 3 else self.T['wait_input'])
-
-    def _hop(self):
-        return IDLE_HOP_SEC if self.silent_run >= 2 else HOP_SEC
 
     def _bar(self, frac, color):
         w = self.bar.winfo_width() or 248
@@ -476,10 +267,6 @@ class App:
         self.sub.config(text=msg[:80])
 
     def run(self):
-        def tick():
-            threading.Thread(target=self._worker, daemon=True).start()
-            self.root.after(int(self._hop() * 1000), tick)
-        self.root.after(1500, tick)
         self.root.mainloop()
 
 
